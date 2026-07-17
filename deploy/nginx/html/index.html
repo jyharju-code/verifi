@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Verifi: Human judgment for AI agents</title>
-  <meta name="description" content="Verifi lets AI agents buy a real human judgment through a durable two-gate x402 flow on Base.">
+  <meta name="description" content="Verifi lets AI agents ask a real person for a decision, correction, or better answer. The first five complete reviews are free, then 3 USDC each.">
   <meta name="theme-color" content="#080908">
   <link rel="canonical" href="https://verifi.cloud/">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23d9ff57'/%3E%3Ccircle cx='32' cy='32' r='10' fill='%23080908'/%3E%3C/svg%3E">
@@ -364,9 +364,9 @@
       <small>Human judgment API</small>
     </a>
     <nav class="nav-links" aria-label="Primary navigation">
-      <a href="#protocol">Protocol</a>
-      <a href="#agents">For agents</a>
-      <a href="#humans">For humans</a>
+      <a href="#protocol">How it works</a>
+      <a href="#agents">Build with Verifi</a>
+      <a href="#humans">Human review</a>
       <a href="#pricing">Pricing</a>
       <a href="#contact">Contact</a>
     </nav>
@@ -381,40 +381,40 @@
   <section class="hero" id="top">
     <div class="container hero-grid">
       <div>
-        <div class="eyebrow">x402 endpoint for human judgment</div>
-        <h1>When an AI agent needs judgment, it can <span>ask a human.</span></h1>
-        <p class="hero-lead">Verifi gives agents a durable way to buy a real human decision. Pay 0.10 USDC to enter the queue, poll for as long as the work takes, then unlock the ready answer for 2.90 USDC.</p>
+        <div class="eyebrow">Human judgment for AI agents</div>
+        <h1>Give your AI agent access to <span>real human judgment.</span></h1>
+        <p class="hero-lead">Send a question, claim, or draft to a human responder. Get back a clear verdict or a stronger answer your agent can use. The first five complete reviews are free, then 3 USDC each.</p>
         <div class="hero-actions">
-          <a class="btn primary" href="#protocol">See the protocol</a>
-          <a class="btn" href="/docs/">Open API reference</a>
+          <a class="btn primary" href="#protocol">See how it works</a>
+          <a class="btn" href="/docs/">Start with the API</a>
         </div>
         <div class="hero-facts" aria-label="Protocol summary">
+          <span class="pill">Five reviews free</span>
           <span class="pill">No API keys</span>
           <span class="pill">USDC on Base</span>
-          <span class="pill">Durable polling</span>
-          <span class="pill">Auditable chain</span>
+          <span class="pill">Clear human verdict</span>
         </div>
       </div>
 
       <div class="flow-window" aria-label="Example Verifi request lifecycle">
         <div class="window-bar">
           <div class="window-dots" aria-hidden="true"><i></i><i></i><i></i></div>
-          <span class="window-title">example-chain.json</span>
+          <span class="window-title">human-review.json</span>
           <span class="pill lime">Contract v2</span>
         </div>
         <div class="flow-body">
           <div class="flow-step active">
-            <div class="flow-head"><span class="flow-label">01 Admit</span><span class="flow-price">0.10 USDC</span></div>
+            <div class="flow-head"><span class="flow-label">01 Send</span><span class="flow-price">0.10 USDC</span></div>
             <p class="code-line"><span class="code-dim">POST</span> /verify
 <span class="code-key">202</span> { "verify_id": "a1b2...", "status": "processing" }</p>
           </div>
           <div class="flow-step">
-            <div class="flow-head"><span class="flow-label">02 Poll</span><span class="flow-price">Minutes are OK</span></div>
+            <div class="flow-head"><span class="flow-label">02 Human review</span><span class="flow-price">In progress</span></div>
             <p class="code-line"><span class="code-dim">GET</span> /verify/a1b2...
 <span class="code-key">200</span> { "status": "ready", "verdict": null, "next_action": "unlock" }</p>
           </div>
           <div class="flow-step active">
-            <div class="flow-head"><span class="flow-label">03 Unlock</span><span class="flow-price">2.90 USDC</span></div>
+            <div class="flow-head"><span class="flow-label">03 Get the answer</span><span class="flow-price">2.90 USDC</span></div>
             <p class="code-line"><span class="code-dim">POST</span> /verify-unlock?id=a1b2...
 <span class="code-key">200</span> { "status": "completed", "verdict": "refined", "explanation": "..." }</p>
           </div>
@@ -430,44 +430,44 @@
     <div class="container">
       <div class="section-head">
         <div>
-          <div class="eyebrow">One chain, two explicit gates</div>
-          <h2>Pay for access. Wait for the work. Pay for the answer.</h2>
+          <div class="eyebrow">How it works</div>
+          <h2>Ask a human. Get a clear decision. Keep moving.</h2>
         </div>
-        <p>A good human answer does not always fit inside a short HTTP timeout. Verifi makes waiting a normal, recoverable part of the protocol.</p>
+        <p>Verifi gives a human the context to accept, reject, or improve what your agent proposes. Your agent can check back and collect the answer when it is ready.</p>
       </div>
       <div class="protocol-grid">
         <div class="protocol-rail">
           <div class="rail-step highlight">
             <span class="rail-index">01</span>
-            <div><strong>Submit and enter the queue</strong><small>The first settlement is recorded before human work begins.</small></div>
+            <div><strong>Send the request</strong><small>The 0.10 USDC entry fee confirms the request and places it in the human queue.</small></div>
             <span class="rail-cost">0.10 USDC</span>
           </div>
           <div class="rail-step">
             <span class="rail-index">02</span>
-            <div><strong>A human reviews the request</strong><small>The responder can accept, reject, or write a refined answer.</small></div>
-            <span class="rail-cost free">POLL</span>
+            <div><strong>A person reviews the full context</strong><small>The responder can accept, reject, or write a better answer.</small></div>
+            <span class="rail-cost free">REVIEW</span>
           </div>
           <div class="rail-step">
             <span class="rail-index">03</span>
-            <div><strong>The result becomes ready</strong><small>The status is public, but the verdict and explanation remain locked.</small></div>
-            <span class="rail-cost free">LOCKED</span>
+            <div><strong>Your agent sees when the answer is ready</strong><small>The status makes the next step clear without exposing the result early.</small></div>
+            <span class="rail-cost free">READY</span>
           </div>
           <div class="rail-step highlight">
             <span class="rail-index">04</span>
-            <div><strong>Unlock the completed answer</strong><small>A second settlement releases the human result.</small></div>
+            <div><strong>Unlock and use the answer</strong><small>Pay 2.90 USDC to receive the verdict and explanation.</small></div>
             <span class="rail-cost">2.90 USDC</span>
           </div>
         </div>
         <div class="card promise">
           <div>
-            <div class="eyebrow">Same actions for free and paid</div>
-            <h3>Five complete chains per wallet are free.</h3>
-            <p>Free use does not create a second protocol. The agent still submits, polls, sees ready, and explicitly unlocks the result. Both gates simply cost 0.00 USDC.</p>
+            <div class="eyebrow">Try the complete service free</div>
+            <h3>Your first five reviews cost nothing.</h3>
+            <p>Free reviews work exactly like paid reviews. Your agent sends the request, waits for the human decision, and unlocks the answer, with both fees reduced to 0.00 USDC.</p>
           </div>
           <ul class="promise-list">
-            <li><b>01</b> Both gates are covered by one free entitlement.</li>
-            <li><b>02</b> The five uses are tied to the wallet address.</li>
-            <li><b>03</b> A failed admitted request grants one 0.10 USDC entry credit.</li>
+            <li><b>01</b> Each free review covers both payment steps.</li>
+            <li><b>02</b> Every wallet receives five complete free reviews.</li>
+            <li><b>03</b> If an admitted request fails, the wallet receives a 0.10 USDC entry credit.</li>
           </ul>
         </div>
       </div>
@@ -476,11 +476,11 @@
 
   <section class="manifesto">
     <div class="container">
-      <div class="eyebrow">Fair Trade Intelligence</div>
-      <p class="manifesto-quote">The human is not hidden inside the API. <span>Human judgment is the product.</span></p>
+      <div class="eyebrow">Why Verifi</div>
+      <p class="manifesto-quote">Human judgment is not a fallback. <span>It is the product.</span></p>
       <div class="manifesto-copy">
-        <p class="statement">AI agents are fast and capable. They still encounter claims, decisions, language, and consequences that deserve a person.</p>
-        <p>Verifi turns that escalation into an explicit economic relationship. The agent knows when it paid, the person gets a clear task, and the system records the request, the two gates, free entitlements, settlements, credits, and the final outcome.</p>
+        <p class="statement">AI is excellent at speed and scale. Some choices still benefit from human context, taste, and responsibility.</p>
+        <p>Use Verifi to review a customer message, challenge an uncertain claim, or improve an answer before your agent acts on it.</p>
       </div>
     </div>
   </section>
@@ -489,23 +489,23 @@
     <div class="container">
       <div class="section-head">
         <div>
-          <div class="eyebrow">For agents</div>
-          <h2>A small interface for work that can take real time.</h2>
+          <div class="eyebrow">Built for AI agents</div>
+          <h2>Add human judgment with one API.</h2>
         </div>
-        <p>No account portal and no API key. The requester wallet is the identity, x402 is the payment layer, and the verify ID is the durable handle.</p>
+        <p>No account setup or API key. Your agent sends the work, checks its status, and unlocks the human answer when it is ready. Payment runs through x402 with USDC on Base.</p>
       </div>
       <div class="agent-grid">
         <div class="agent-notes">
-          <div class="agent-note"><b>Durable from the first response</b><span>Every admitted request returns a verify ID that survives disconnects, restarts, and long human response times.</span></div>
-          <div class="agent-note"><b>Machine-readable next actions</b><span>Poll while processing, unlock when ready, stop on failed, and consume the answer on completed.</span></div>
-          <div class="agent-note"><b>One active chain per wallet</b><span>The agent cannot accidentally create a pile of parallel requests or pay twice for admission.</span></div>
+          <div class="agent-note"><b>More useful than a yes or no</b><span>The responder can accept, reject, or improve the proposed answer and explain the decision.</span></div>
+          <div class="agent-note"><b>A clear next step every time</b><span>Each response tells the agent whether to wait, unlock the answer, stop, or use the completed result.</span></div>
+          <div class="agent-note"><b>One request stays one request</b><span>A verification ID keeps the question, payment, human work, and final answer connected.</span></div>
         </div>
         <div class="code-card">
           <div class="code-toolbar">
             <span class="window-title">quickstart.sh</span>
             <button class="copy-button" type="button" data-copy="quickstart-code">Copy</button>
           </div>
-          <pre id="quickstart-code"><span class="code-dim"># The wallet receives five complete free chains.</span>
+          <pre id="quickstart-code"><span class="code-dim"># Send a request. The first five complete reviews are free.</span>
 curl -X POST https://verifi.cloud/verify \
   -H "Content-Type: application/json" \
   -d '{
@@ -514,10 +514,10 @@ curl -X POST https://verifi.cloud/verify \
     "agent_id": "0xYourWalletAddress"
   }'
 
-<span class="code-dim"># Keep the returned verify_id. Poll for minutes if needed.</span>
+<span class="code-dim"># Check the returned verify_id until the answer is ready.</span>
 curl https://verifi.cloud/verify/{verify_id}
 
-<span class="code-dim"># When status is ready, perform the explicit second gate.</span>
+<span class="code-dim"># Unlock the verdict and explanation when status is ready.</span>
 curl -X POST "https://verifi.cloud/verify-unlock?id={verify_id}"</pre>
         </div>
       </div>
@@ -534,22 +534,22 @@ curl -X POST "https://verifi.cloud/verify-unlock?id={verify_id}"</pre>
     <div class="container human-panel">
       <div class="card human-large">
         <div>
-          <div class="eyebrow">For humans</div>
-          <h2>Take the time judgment actually needs.</h2>
+          <div class="eyebrow">Real human review</div>
+          <h2>A person reviews the full context.</h2>
         </div>
-        <p>The agent polls instead of holding a fragile request open. The responder receives the context in Telegram and answers when the work is complete. Quality is not forced into an artificial 110 second window.</p>
+        <p>The responder sees what the agent is trying to achieve, what it is proposing, and who asked. They can approve it, reject it, or return a stronger answer with an explanation.</p>
       </div>
       <div class="human-stack">
         <div class="card">
           <div class="card-number">01</div>
-          <h3>One clear request</h3>
-          <p>The intent, claim, and requester are shown together. The responder sees what is being asked before making the decision.</p>
+          <h3>More than a binary verdict</h3>
+          <p>A responder can refine the proposed answer when a simple acceptance or rejection would not be enough.</p>
           <div class="choice-row"><span>Accept</span><span>Reject</span><span>Refine</span></div>
         </div>
         <div class="card">
           <div class="card-number">02</div>
-          <h3>Human work remains visible</h3>
-          <p>Requests, assignments, response times, outcomes, and compensation events stay in the operational audit trail.</p>
+          <h3>A decision you can trace</h3>
+          <p>The request, human outcome, timing, and payments remain connected, so the result never loses its context.</p>
         </div>
       </div>
     </div>
@@ -560,30 +560,30 @@ curl -X POST "https://verifi.cloud/verify-unlock?id={verify_id}"</pre>
       <div class="section-head">
         <div>
           <div class="eyebrow">Pricing</div>
-          <h2>One complete answer. Three dollars total.</h2>
+          <h2>Five reviews free. Then 3 USDC per completed review.</h2>
         </div>
-        <p>The split is part of the protocol. The first payment admits the request. The second payment purchases the finished result.</p>
+        <p>The price is split into a 0.10 USDC entry fee and a 2.90 USDC answer fee. You only pay the second fee when an answer is ready to unlock.</p>
       </div>
       <div class="pricing-grid">
         <div class="card price-card">
           <span class="pill">Evaluation</span>
-          <div class="price">$0 <small>per chain</small></div>
-          <h3>First five complete chains</h3>
+          <div class="price">0 <small>USDC per review</small></div>
+          <h3>Your first five complete reviews</h3>
           <ul>
-            <li>Both the 0.10 and 2.90 USDC gates are free.</li>
-            <li>The same submit, poll, ready, and unlock actions apply.</li>
-            <li>The allowance belongs to the wallet address.</li>
+            <li>Both the 0.10 and 2.90 USDC fees are waived.</li>
+            <li>Free reviews work exactly like paid reviews.</li>
+            <li>Each wallet receives its own five free reviews.</li>
           </ul>
         </div>
         <div class="card price-card paid-card">
           <span class="pill lime">Pay as you go</span>
-          <div class="price">$3.00 <small>per completed chain</small></div>
+          <div class="price">3.00 <small>USDC per completed review</small></div>
           <div class="split-price" aria-label="Paid price breakdown">
-            <div class="gate-price"><span>Gate 1, queue entry</span><strong>$0.10</strong></div>
+            <div class="gate-price"><span>Gate 1, queue entry</span><strong>0.10 USDC</strong></div>
             <div class="plus" aria-hidden="true">+</div>
-            <div class="gate-price"><span>Gate 2, answer unlock</span><strong>$2.90</strong></div>
+            <div class="gate-price"><span>Gate 2, answer unlock</span><strong>2.90 USDC</strong></div>
           </div>
-          <div class="credit-note">If admitted human work fails, the wallet receives one 0.10 USDC entry credit for its next chain. The credit does not cover the 2.90 USDC answer gate.</div>
+          <div class="credit-note">If an admitted request fails before an answer is produced, the same wallet receives a 0.10 USDC entry credit for its next request. The 2.90 USDC answer fee remains payable when that next answer is ready.</div>
         </div>
       </div>
     </div>
@@ -592,17 +592,17 @@ curl -X POST "https://verifi.cloud/verify-unlock?id={verify_id}"</pre>
   <section>
     <div class="container ledger">
       <div class="card ledger-copy">
-        <div class="eyebrow">Transparent by design</div>
-        <h2>Money and state share one audit trail.</h2>
-        <p>The operator can trace where a request came from, what it asked, how it entered the queue, what each gate cost, and whether a free use or failure credit was consumed.</p>
-        <a class="btn" href="/docs/">Read the full contract</a>
+        <div class="eyebrow">Clear records</div>
+        <h2>See what was asked, paid, and answered.</h2>
+        <p>Every verification connects the requester wallet, original question, payment, status, human outcome, and any free use or credit in one record.</p>
+        <a class="btn" href="/docs/">Read the API contract</a>
       </div>
       <div class="card ledger-table" aria-label="Recorded verification fields">
-        <div class="ledger-row"><b>REQUEST</b><span>Wallet, intent, claim, instance, verify ID</span></div>
-        <div class="ledger-row"><b>ENTRY</b><span>Funding source, list price, charged amount, payer, settlement transaction</span></div>
-        <div class="ledger-row"><b>WORK</b><span>Admission, assignment, response, failure, and expiry timestamps</span></div>
-        <div class="ledger-row"><b>UNLOCK</b><span>Funding source, charged amount, payer, settlement transaction</span></div>
-        <div class="ledger-row"><b>ENTITLEMENTS</b><span>Free-use number, failure-credit source, and consuming request</span></div>
+        <div class="ledger-row"><b>REQUEST</b><span>Who asked, what they need, and the original claim</span></div>
+        <div class="ledger-row"><b>ENTRY</b><span>How the request entered the queue and what it cost</span></div>
+        <div class="ledger-row"><b>REVIEW</b><span>When human work started, finished, or failed</span></div>
+        <div class="ledger-row"><b>ANSWER</b><span>The final verdict, explanation, and unlock payment</span></div>
+        <div class="ledger-row"><b>FREE USES</b><span>Which free review or failure credit was used</span></div>
       </div>
     </div>
   </section>
@@ -610,9 +610,9 @@ curl -X POST "https://verifi.cloud/verify-unlock?id={verify_id}"</pre>
   <section class="contact-section" id="contact">
     <div class="container contact-grid">
       <div class="contact-copy">
-        <div class="eyebrow">Direct to the operator</div>
-        <h2>Questions, feedback, or a real use case?</h2>
-        <p>This form delivers your message to the Verifi operator in Telegram. It only reports success after Telegram confirms delivery.</p>
+        <div class="eyebrow">Talk to Verifi</div>
+        <h2>Could human judgment help your agent?</h2>
+        <p>Tell us what you are building or where your agent needs a person. Your message goes directly to the Verifi operator.</p>
       </div>
       <form class="contact-form" id="contact-form" novalidate>
         <div class="field-grid">
@@ -634,8 +634,8 @@ curl -X POST "https://verifi.cloud/verify-unlock?id={verify_id}"</pre>
           <textarea id="contact-message" name="message" maxlength="5000" required placeholder="Tell us what your agent needs from a human."></textarea>
         </div>
         <div class="form-footer">
-          <span class="form-note">Your name, email, and message are sent to the operator through Telegram.</span>
-          <button class="btn primary" id="contact-submit" type="submit">Send to Telegram</button>
+          <span class="form-note">Your name, email, and message are sent privately to the operator via Telegram.</span>
+          <button class="btn primary" id="contact-submit" type="submit">Send message</button>
         </div>
         <div class="form-status" id="contact-status" role="status" aria-live="polite"></div>
       </form>
@@ -646,7 +646,7 @@ curl -X POST "https://verifi.cloud/verify-unlock?id={verify_id}"</pre>
 <footer>
   <div class="container footer-inner">
     <a class="brand" href="#top"><span class="brand-mark" aria-hidden="true"></span><span>verifi.cloud</span></a>
-    <span>Human judgment for AI agents, paid through x402 on Base.</span>
+    <span>Real human judgment, available to AI agents through one API.</span>
     <div class="footer-links"><a href="/docs/">Docs</a><a href="/llms.txt">llms.txt</a><a href="https://github.com/jyharju-code/verifi">GitHub</a></div>
   </div>
 </footer>
@@ -702,12 +702,12 @@ curl -X POST "https://verifi.cloud/verify-unlock?id={verify_id}"</pre>
         const result = await response.json().catch(function () { return {}; });
         if (!response.ok || !result.ok) throw new Error('delivery_failed');
         form.reset();
-        showStatus('success', 'Delivered to Telegram. Thank you.');
+        showStatus('success', 'Message sent. Thank you.');
       } catch (_error) {
-        showStatus('error', 'Telegram delivery failed. Please try again in a moment.');
+        showStatus('error', 'Message could not be delivered. Please try again in a moment.');
       } finally {
         submit.disabled = false;
-        submit.textContent = 'Send to Telegram';
+        submit.textContent = 'Send message';
       }
     });
   })();
