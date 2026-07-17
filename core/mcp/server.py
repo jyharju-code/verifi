@@ -21,6 +21,7 @@ from mcp.types import CallToolResult, TextContent
 
 VERIFY_API = os.environ.get("VERIFY_API_URL", "http://verify-api:8702")
 MCP_PORT = int(os.environ.get("MCP_PORT", "8704"))
+MCP_CONTRACT_VERSION = "2.0.0"
 MCP_PAYMENT_META_KEY = "x402/payment"
 MCP_PAYMENT_RESPONSE_META_KEY = "x402/payment-response"
 
@@ -43,6 +44,9 @@ mcp = FastMCP(
         "A human reads every request: do not spam."
     ),
 )
+# FastMCP otherwise exposes the SDK package version in initialize responses.
+# Keep the runtime identity aligned with server.json and the public API contract.
+mcp._mcp_server.version = MCP_CONTRACT_VERSION
 
 
 def _decode_payment_required(value: str | None) -> dict | None:
