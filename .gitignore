@@ -9,3 +9,5 @@ venv/
 .DS_Store
 .playwright-cli/
 output/playwright/
+mcp-registry-key.pem
+mcp-registry-private-key*

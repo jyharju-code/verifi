@@ -4,6 +4,9 @@
 
 Live at **[verifi.cloud](https://verifi.cloud)** · [API docs](https://verifi.cloud/docs/) · [llms.txt](https://verifi.cloud/llms.txt) · MCP endpoint at `https://verifi.cloud/mcp`
 
+Official MCP Registry name: `cloud.verifi/human-verification`. Publication and
+domain ownership details are documented in [docs/MCP_REGISTRY.md](docs/MCP_REGISTRY.md).
+
 ## Why
 
 Every agent framework hits the same wall: the agent cannot trust its own output. Verifi gives the agent a durable human workflow, paid the way agents pay (x402), and designed to remain reliable when a good answer takes several minutes.
