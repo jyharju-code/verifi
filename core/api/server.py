@@ -16,7 +16,7 @@ import os
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from core import config, notify
 from core.audit import audit
@@ -567,28 +567,58 @@ async def entitlement_unlock(verify_id: UUID, body: EntitlementUnlockIn) -> dict
 
 
 class ContactIn(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     name: str = Field(min_length=1, max_length=200)
-    email: str = Field(min_length=3, max_length=300)
+    email: str = Field(
+        min_length=3,
+        max_length=300,
+        pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+    )
     message: str = Field(min_length=1, max_length=5000)
+    company_website: str = Field(default="", max_length=300)
 
 
 @app.post("/contact")
 async def contact(body: ContactIn) -> dict:
     """Public contact form (proxied through nginx). Delivers to Telegram."""
+    if body.company_website:
+        await audit("core-api", "contact_spam_filtered", {})
+        return {"ok": True, "delivery": "filtered"}
+
     await audit(
         "core-api",
-        "contact_message",
+        "contact_message_received",
         {"name": body.name, "email": body.email, "length": len(body.message)},
     )
-    if config.ADMIN_TELEGRAM_ID:
-        await notify.send_message(
+
+    if not config.TELEGRAM_BOT_TOKEN or not config.ADMIN_TELEGRAM_ID:
+        await audit("core-api", "contact_delivery_failed", {"reason": "not_configured"})
+        raise HTTPException(status_code=503, detail="contact delivery is not configured")
+
+    try:
+        message_id = await notify.send_message(
             config.ADMIN_TELEGRAM_ID,
             "📬 Yhteydenotto verifi.cloudista\n\n"
             f"Nimi: {body.name}\n"
             f"Sähköposti: {body.email}\n\n"
             f"{body.message[:3500]}",
         )
-    return {"ok": True}
+    except Exception as exc:
+        log.warning("contact Telegram delivery raised %s", type(exc).__name__)
+        await audit("core-api", "contact_delivery_failed", {"reason": "telegram_error"})
+        raise HTTPException(status_code=502, detail="Telegram delivery failed") from exc
+
+    if message_id is None:
+        await audit("core-api", "contact_delivery_failed", {"reason": "telegram_rejected"})
+        raise HTTPException(status_code=502, detail="Telegram delivery failed")
+
+    await audit(
+        "core-api",
+        "contact_message_delivered",
+        {"telegram_message_id": message_id},
+    )
+    return {"ok": True, "delivery": "telegram"}
 
 
 @app.get("/internal/quota")
