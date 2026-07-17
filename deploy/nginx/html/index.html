@@ -93,6 +93,8 @@
       text-transform: uppercase;
     }
     .pill.lime { border-color: transparent; background: var(--lime); color: var(--black); }
+    a.pill { text-decoration: none; }
+    a.pill:hover { border-color: rgba(217,255,87,0.55); color: var(--text); }
     .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 0 4px rgba(217,255,87,0.12); }
     .btn {
       display: inline-flex;
@@ -386,13 +388,14 @@
         <p class="hero-lead">Send a question, claim, or draft to a human responder. Get back a clear verdict or a stronger answer your agent can use. The first five complete reviews are free, then 3 USDC each.</p>
         <div class="hero-actions">
           <a class="btn primary" href="#protocol">See how it works</a>
-          <a class="btn" href="/docs/">Start with the API</a>
+          <a class="btn" href="/docs/#mcp">Connect with MCP</a>
         </div>
         <div class="hero-facts" aria-label="Protocol summary">
           <span class="pill">Five reviews free</span>
-          <span class="pill">No API keys</span>
+          <span class="pill">No signup or API keys</span>
           <span class="pill">USDC on Base</span>
           <span class="pill">Clear human verdict</span>
+          <a class="pill" href="/docs/#mcp">MCP: verifi.cloud/mcp</a>
         </div>
       </div>
 
@@ -410,8 +413,8 @@
           </div>
           <div class="flow-step">
             <div class="flow-head"><span class="flow-label">02 Human review</span><span class="flow-price">In progress</span></div>
-            <p class="code-line"><span class="code-dim">GET</span> /verify/a1b2...
-<span class="code-key">200</span> { "status": "ready", "verdict": null, "next_action": "unlock" }</p>
+            <p class="code-line"><span class="code-dim">CALLBACK</span> /verifi-events
+<span class="code-key">200</span> { "event": "verify.ready", "next_action": "unlock" }</p>
           </div>
           <div class="flow-step active">
             <div class="flow-head"><span class="flow-label">03 Get the answer</span><span class="flow-price">2.90 USDC</span></div>
@@ -449,7 +452,7 @@
           </div>
           <div class="rail-step">
             <span class="rail-index">03</span>
-            <div><strong>Your agent sees when the answer is ready</strong><small>The status makes the next step clear without exposing the result early.</small></div>
+            <div><strong>Your agent sees when the answer is ready</strong><small>An HTTPS callback wakes the agent without an active polling loop.</small></div>
             <span class="rail-cost free">READY</span>
           </div>
           <div class="rail-step highlight">
@@ -492,12 +495,12 @@
           <div class="eyebrow">Built for AI agents</div>
           <h2>Add human judgment with one API.</h2>
         </div>
-        <p>No account setup or API key. Your agent sends the work, checks its status, and unlocks the human answer when it is ready. Payment runs through x402 with USDC on Base.</p>
+        <p>No API key, signup, or account. Just a wallet. Your agent sends the work and unlocks the human answer when it is ready. Payment runs through x402 with USDC on Base.</p>
       </div>
       <div class="agent-grid">
         <div class="agent-notes">
           <div class="agent-note"><b>More useful than a yes or no</b><span>The responder can accept, reject, or improve the proposed answer and explain the decision.</span></div>
-          <div class="agent-note"><b>A clear next step every time</b><span>Each response tells the agent whether to wait, unlock the answer, stop, or use the completed result.</span></div>
+          <div class="agent-note"><b>Use a callback instead of an active polling loop</b><span>Pass an HTTPS callback URL to receive ready or failed events. Keep the verification ID for recovery if delivery fails.</span></div>
           <div class="agent-note"><b>One request stays one request</b><span>A verification ID keeps the question, payment, human work, and final answer connected.</span></div>
         </div>
         <div class="code-card">
@@ -511,10 +514,11 @@ curl -X POST https://verifi.cloud/verify \
   -d '{
     "intent": "Review this customer update",
     "claim": "We restored service and will compensate affected users.",
-    "agent_id": "0xYourWalletAddress"
+    "agent_id": "0xYourWalletAddress",
+    "callback_url": "https://your-agent.example/verifi-events"
   }'
 
-<span class="code-dim"># Check the returned verify_id until the answer is ready.</span>
+<span class="code-dim"># The callback reports ready or failed. Poll only as a recovery fallback.</span>
 curl https://verifi.cloud/verify/{verify_id}
 
 <span class="code-dim"># Unlock the verdict and explanation when status is ready.</span>
@@ -522,7 +526,7 @@ curl -X POST "https://verifi.cloud/verify-unlock?id={verify_id}"</pre>
         </div>
       </div>
       <div class="state-table" aria-label="Agent state handling">
-        <div class="state-line"><code>processing</code><span>Human work is pending.</span><span>Wait and poll the same verify ID.</span></div>
+        <div class="state-line"><code>processing</code><span>Human work is pending.</span><span>Wait for the callback, or poll to recover.</span></div>
         <div class="state-line"><code>ready</code><span>The result exists but is locked.</span><span>Call the separate unlock endpoint.</span></div>
         <div class="state-line"><code>failed</code><span>No answer can be purchased.</span><span>Stop polling and inspect the entry credit.</span></div>
         <div class="state-line"><code>completed</code><span>The result has been unlocked.</span><span>Read verdict and explanation.</span></div>
