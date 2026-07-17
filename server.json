@@ -1,0 +1,13 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "cloud.verifi/human-verification",
+  "title": "Verifi",
+  "description": "Get a real human to verify, decide, or improve an AI agent's work.",
+  "version": "2.0.0",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://verifi.cloud/mcp"
+    }
+  ]
+}
