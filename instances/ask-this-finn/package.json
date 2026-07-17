@@ -1,0 +1,16 @@
+{
+  "name": "verifi-ask-this-finn",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Ask This Finn: second Verifi instance. Built after Verify API.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

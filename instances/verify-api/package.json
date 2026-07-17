@@ -1,0 +1,19 @@
+{
+  "name": "verifi-verify-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Verify API: pay-per-verify REST endpoint for x402 agents, first Verifi instance.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@x402/core": "^2.18.0",
+    "@x402/evm": "^2.18.0",
+    "@x402/express": "^2.18.0",
+    "express": "^4.21.2"
+  }
+}

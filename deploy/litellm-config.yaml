@@ -1,0 +1,20 @@
+# LiteLLM proxy: one endpoint (port 4000) for DeepSeek calls.
+# Aliases stay stable for callers; adjust the upstream model ids here if
+# DeepSeek publishes new V4 slugs.
+model_list:
+  - model_name: deepseek-flash
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+  - model_name: deepseek-pro
+    litellm_params:
+      model: deepseek/deepseek-reasoner
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+litellm_settings:
+  drop_params: true
+  num_retries: 2
+  request_timeout: 120

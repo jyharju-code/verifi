@@ -1,0 +1,185 @@
+# Verifi production stack. Lives at /root/verifi/ on the VPS.
+# Run from the repo root: docker compose -f deploy/docker-compose.yml --env-file /root/verifi/.env ...
+# Start order: postgres, ollama, litellm, core-api, verify-api, then nginx.
+# The bot is behind the "bot" profile until the token question is settled.
+
+name: verifi
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: verifi
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: verifi
+    # Published on localhost only. Docker published ports bypass UFW, so
+    # binding to 127.0.0.1 is the actual firewall here.
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../core/db:/schema:ro
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U verifi -d verifi"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 4G
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "127.0.0.1:4000:4000"
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml:ro
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+
+  core-api:
+    build:
+      context: ..
+      dockerfile: core/Dockerfile
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://verifi:${POSTGRES_PASSWORD}@postgres:5432/verifi
+      DASHBOARD_TOKEN: ${DASHBOARD_TOKEN}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      ADMIN_TELEGRAM_ID: ${ADMIN_TELEGRAM_ID}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      FREE_COMMISSION_USD: ${FREE_COMMISSION_USD:-0.50}
+      MAX_PENDING_TOTAL: ${MAX_PENDING_TOTAL:-25}
+    command: ["uvicorn", "core.api.server:app", "--host", "0.0.0.0", "--port", "8700"]
+
+  bot:
+    profiles: ["bot"]
+    build:
+      context: ..
+      dockerfile: core/Dockerfile
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://verifi:${POSTGRES_PASSWORD}@postgres:5432/verifi
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET}
+      ADMIN_TELEGRAM_ID: ${ADMIN_TELEGRAM_ID}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      BOT_MODE: ${BOT_MODE:-polling}
+      BOT_LISTEN: 0.0.0.0
+      BOT_PORT: "8701"
+      FREE_COMMISSION_USD: ${FREE_COMMISSION_USD:-0.50}
+    command: ["python", "-m", "core.bot.bot"]
+
+  verify-api:
+    build:
+      context: ../instances/verify-api
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      - core-api
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8702"
+      CORE_API_URL: http://core-api:8700
+      INSTANCE_ID: verify-api
+      VERIFY_WAIT_TIMEOUT_S: ${VERIFY_WAIT_TIMEOUT_S:-110}
+      X402_PAY_TO: ${X402_PAY_TO:-}
+      X402_PRICE: ${X402_PRICE:-$$0.10}
+      X402_UNLOCK_PRICE: ${X402_UNLOCK_PRICE:-$$3.00}
+      X402_NETWORK: ${X402_NETWORK:-eip155:8453}
+      FACILITATOR_URL: ${FACILITATOR_URL:-https://x402.org/facilitator}
+      CDP_API_KEY_ID: ${CDP_API_KEY_ID:-}
+      CDP_API_KEY_SECRET: ${CDP_API_KEY_SECRET:-}
+
+# MCP server: Verifi as tools for Claude, Cursor, and other MCP agents.
+  # Streamable HTTP at /mcp, public via nginx https://verifi.cloud/mcp.
+  mcp:
+    build:
+      context: ..
+      dockerfile: core/Dockerfile
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      - verify-api
+    environment:
+      VERIFY_API_URL: http://verify-api:8702
+      MCP_PORT: "8704"
+    command: ["python", "-m", "core.mcp.server"]
+
+  # Self-hosted x402 facilitator (x402-rs). Replaces the CDP facilitator,
+  # which is not available to EU sellers. Verifies payment signatures and
+  # submits settlements on Base; gas comes from FACILITATOR_PRIVATE_KEY's
+  # wallet, revenue goes directly to X402_PAY_TO. Behind the "payments"
+  # profile until the gas wallet exists.
+  facilitator:
+    image: ghcr.io/x402-rs/x402-facilitator:latest
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["payments"]
+    ports:
+      - "127.0.0.1:8402:8080"
+    volumes:
+      - ./facilitator-config.json:/app/config.json:ro
+    environment:
+      FACILITATOR_PRIVATE_KEY: ${FACILITATOR_PRIVATE_KEY:-}
+
+  nginx:
+    image: nginx:stable
+    restart: unless-stopped
+    logging: *default-logging
+    profiles: ["edge"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - certbot-etc:/etc/letsencrypt
+      - certbot-web:/var/www/certbot
+    depends_on:
+      - core-api
+      - verify-api
+
+  certbot:
+    image: certbot/certbot
+    profiles: ["certbot"]
+    volumes:
+      - certbot-etc:/etc/letsencrypt
+      - certbot-web:/var/www/certbot
+
+volumes:
+  pgdata:
+  ollama:
+  certbot-etc:
+  certbot-web:

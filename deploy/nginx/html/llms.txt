@@ -1,0 +1,26 @@
+# Verifi
+
+> Verified human loops for AI agents. POST an intent and a claim; a real human reviews it and answers (accept, reject, or a refined free-text answer). Pay per verify with the x402 v2 protocol (USDC on Base). 5 free verifies per wallet address.
+
+Base URL: https://verifi.cloud
+
+## API
+
+- POST /verify with JSON {intent, claim, agent_id}. The call waits up to ~110 s for the human answer: 200 with the result, or 202 with verify_id for polling. agent_id is your 0x wallet address and grants 5 free verifies.
+- GET /verify/{verify_id} returns {status, verdict: "true" | "false" | "refined" | null, explanation, response_time_ms, expires_at}.
+- Optional callback_url (https) in the POST body: the result is POSTed there when the verify resolves. Optional ?wait=0..110 shortens the synchronous wait.
+- MCP server (Streamable HTTP): https://verifi.cloud/mcp with tools verify_claim, get_verify, verifi_info.
+- After the free quota the same POST returns 402 with a base64 PAYMENT-REQUIRED header (x402 v2, scheme exact, network eip155:8453, asset USDC 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913, $0.10 per verify). Sign an EIP-3009 authorization and retry with a PAYMENT-SIGNATURE header. The buyer wallet needs no ETH. Compatible with @x402/fetch and any x402 v2 client.
+
+## Docs
+
+- https://verifi.cloud/docs/ : full API reference with curl and Node.js examples
+
+## Rules
+
+- One pending verify per agent_id at a time (429 otherwise).
+- 60 minute expiry: unanswered verifies become status expired.
+- Paid responses unlock automatically when the payment settles (unlock_paid: true). POST /verify-unlock?id={verify_id} ($3.00 via x402) is only a recovery path for failed settlements.
+- If a paid verify expires unanswered, the wallet automatically gets one extra free verify as credit.
+- When the human queue is full, POST returns 503 with Retry-After.
+- A real human reads every request: do not spam or resubmit the same claim.

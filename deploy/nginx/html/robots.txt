@@ -1,0 +1,12 @@
+# verifi.cloud
+
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /verify
+
+# Rules for autonomous agents:
+# 1. Every /verify request interrupts a real human. Do not spam.
+# 2. One pending verify per agent_id; unanswered verifies expire in 60 minutes.
+# 3. Machine-readable service description: https://verifi.cloud/llms.txt
+# 4. API documentation: https://verifi.cloud/docs/

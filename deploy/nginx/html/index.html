@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Verifi — Verified Human Loops for AI Agents</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0a0b0f;
+    --bg2: #111318;
+    --surface: #181a22;
+    --border: #252830;
+    --text: #e8eaed;
+    --text2: #9aa0ab;
+    --accent: #6c5ce7;
+    --accent2: #a29bfe;
+    --green: #00c853;
+    --green-dim: rgba(0,200,83,0.1);
+    --red-dim: rgba(255,82,82,0.1);
+    --radius: 12px;
+  }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+
+  /* Nav */
+  nav {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 20px 0;
+  }
+  nav .logo {
+    font-size: 1.5rem; font-weight: 700;
+    background: linear-gradient(135deg, var(--accent2), var(--accent));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  nav .logo span { color: var(--text); -webkit-text-fill-color: var(--text); }
+  nav .nav-links a {
+    color: var(--text2); text-decoration: none; margin-left: 28px;
+    font-size: 0.9rem; transition: color 0.2s;
+  }
+  nav .nav-links a:hover { color: var(--text); }
+
+  /* Hero */
+  .hero {
+    padding: 100px 0 80px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -50%; left: 50%; transform: translateX(-50%);
+    width: 800px; height: 800px;
+    background: radial-gradient(circle, rgba(108,92,231,0.08) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .hero h1 {
+    font-size: 3.2rem; font-weight: 800; line-height: 1.15;
+    margin-bottom: 20px;
+    background: linear-gradient(135deg, #fff 30%, var(--accent2) 80%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .hero p {
+    font-size: 1.2rem; color: var(--text2);
+    max-width: 640px; margin: 0 auto 40px;
+  }
+  .hero-buttons { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 14px 32px; border-radius: 8px;
+    font-size: 1rem; font-weight: 600; text-decoration: none;
+    transition: all 0.2s; cursor: pointer; border: none;
+  }
+  .btn-primary {
+    background: var(--accent); color: #fff;
+  }
+  .btn-primary:hover { background: #5a4bd1; transform: translateY(-1px); }
+  .btn-secondary {
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover { border-color: var(--accent); background: #1e2030; transform: translateY(-1px); }
+
+  /* Sections */
+  section { padding: 80px 0; }
+  .section-label {
+    display: inline-block;
+    font-size: 0.75rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent2); margin-bottom: 12px;
+  }
+  .section-title {
+    font-size: 2rem; font-weight: 700; margin-bottom: 16px;
+  }
+  .section-sub {
+    color: var(--text2); font-size: 1.05rem; max-width: 600px;
+  }
+
+  /* Features */
+  #features { text-align: center; }
+  #features .section-sub { margin: 0 auto 48px; }
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 24px;
+  }
+  .feature-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 32px 28px;
+    text-align: left; transition: border-color 0.2s;
+  }
+  .feature-card:hover { border-color: var(--accent); }
+  .feature-icon {
+    width: 44px; height: 44px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 16px; font-size: 1.3rem;
+  }
+  .feature-card:nth-child(1) .feature-icon { background: var(--green-dim); }
+  .feature-card:nth-child(2) .feature-icon { background: rgba(108,92,231,0.12); }
+  .feature-card:nth-child(3) .feature-icon { background: rgba(255,152,0,0.12); }
+  .feature-card:nth-child(4) .feature-icon { background: var(--green-dim); }
+  .feature-card:nth-child(5) .feature-icon { background: rgba(108,92,231,0.12); }
+  .feature-card:nth-child(6) .feature-icon { background: rgba(255,82,82,0.1); }
+  .feature-card h3 { font-size: 1.1rem; margin-bottom: 8px; }
+  .feature-card p { font-size: 0.9rem; color: var(--text2); line-height: 1.55; }
+
+  /* How It Works */
+  #how-it-works { text-align: center; }
+  #how-it-works .section-sub { margin: 0 auto 48px; }
+  .steps {
+    display: flex; gap: 32px; justify-content: center; flex-wrap: wrap;
+  }
+  .step {
+    flex: 1; min-width: 200px; max-width: 280px;
+    text-align: center; padding: 24px 16px;
+  }
+  .step-num {
+    width: 48px; height: 48px; border-radius: 50%;
+    background: var(--accent); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    margin: 0 auto 16px; font-weight: 700; font-size: 1.2rem;
+  }
+  .step h3 { font-size: 1.05rem; margin-bottom: 6px; }
+  .step p { font-size: 0.88rem; color: var(--text2); }
+
+  /* Pricing */
+  #pricing { text-align: center; }
+  #pricing .section-sub { margin: 0 auto 48px; }
+  .pricing-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 24px; max-width: 720px; margin: 0 auto;
+  }
+  .pricing-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 36px 28px;
+    text-align: left; position: relative;
+    transition: border-color 0.2s;
+  }
+  .pricing-card:hover { border-color: var(--accent); }
+  .pricing-card.featured {
+    border-color: var(--accent);
+    background: linear-gradient(135deg, var(--surface) 0%, #1a1c30 100%);
+  }
+  .pricing-card.featured .badge {
+    position: absolute; top: -12px; right: 24px;
+    background: var(--accent); color: #fff;
+    font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+    padding: 4px 14px; border-radius: 20px; letter-spacing: 0.04em;
+  }
+  .pricing-card .plan-name { font-size: 0.85rem; color: var(--text2); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 8px; }
+  .pricing-card .price { font-size: 2.4rem; font-weight: 800; margin-bottom: 6px; }
+  .pricing-card .price span { font-size: 1rem; font-weight: 400; color: var(--text2); }
+  .pricing-card .price-sub { font-size: 0.85rem; color: var(--text2); margin-bottom: 24px; }
+  .pricing-card ul { list-style: none; margin-bottom: 28px; }
+  .pricing-card ul li {
+    padding: 6px 0; font-size: 0.9rem; color: var(--text2);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .pricing-card ul li::before { content: '✓'; color: var(--green); font-weight: 700; }
+  .pricing-card .btn { width: 100%; justify-content: center; }
+
+  /* API Quickstart */
+  #api-quickstart { text-align: center; }
+  #api-quickstart .section-sub { margin: 0 auto 48px; }
+  .code-block {
+    background: #0d0f15; border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 24px 28px;
+    text-align: left; overflow-x: auto;
+    margin: 0 auto; max-width: 700px;
+  }
+  .code-block pre {
+    font-family: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", monospace;
+    font-size: 0.82rem; line-height: 1.7; color: var(--text);
+  }
+  .code-block .kw { color: #c792ea; }
+  .code-block .str { color: #c3e88d; }
+  .code-block .cm { color: #546e7a; }
+  .code-block .fn { color: #82aaff; }
+  .code-block .num { color: #f78c6c; }
+  .code-block .op { color: #89ddff; }
+  .code-block .pu { color: var(--accent2); }
+
+  /* Contact Form */
+  #contact { text-align: center; }
+  #contact .section-sub { margin: 0 auto 48px; }
+  .contact-form {
+    max-width: 520px; margin: 0 auto;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 36px 32px;
+    text-align: left;
+  }
+  .form-group { margin-bottom: 20px; }
+  .form-group label {
+    display: block; font-size: 0.85rem; font-weight: 600;
+    color: var(--text2); margin-bottom: 6px;
+  }
+  .form-group input,
+  .form-group textarea {
+    width: 100%; padding: 12px 14px;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); font-size: 0.95rem;
+    font-family: inherit; transition: border-color 0.2s;
+  }
+  .form-group input:focus,
+  .form-group textarea:focus {
+    outline: none; border-color: var(--accent);
+  }
+  .form-group textarea { min-height: 120px; resize: vertical; }
+  .form-status {
+    margin-top: 12px; font-size: 0.9rem; padding: 10px 14px;
+    border-radius: 8px; display: none;
+  }
+  .form-status.success {
+    display: block; background: var(--green-dim); color: var(--green);
+  }
+  .form-status.error {
+    display: block; background: var(--red-dim); color: #ff5252;
+  }
+
+  /* CTA Section */
+  .cta-section {
+    text-align: center; padding: 80px 0;
+    border-top: 1px solid var(--border);
+  }
+  .cta-section h2 { font-size: 2rem; margin-bottom: 12px; }
+  .cta-section p { color: var(--text2); margin-bottom: 32px; }
+
+  /* Footer */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 40px 0 32px;
+  }
+  footer .container {
+    display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px;
+  }
+  footer .logo {
+    font-size: 1rem; font-weight: 700;
+    background: linear-gradient(135deg, var(--accent2), var(--accent));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  footer .footer-links a {
+    color: var(--text2); text-decoration: none; margin-left: 20px;
+    font-size: 0.85rem; transition: color 0.2s;
+  }
+  footer .footer-links a:hover { color: var(--text); }
+  footer .copy { color: var(--text2); font-size: 0.85rem; }
+
+  /* Responsive */
+  @media (max-width: 700px) {
+    .hero h1 { font-size: 2rem; }
+    .hero p { font-size: 1rem; }
+    nav .nav-links a { margin-left: 16px; font-size: 0.8rem; }
+    footer .container { flex-direction: column; text-align: center; }
+    footer .footer-links a { margin: 0 10px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+<!-- Nav -->
+<nav>
+  <div class="logo">verifi<span>.</span></div>
+  <div class="nav-links">
+    <a href="#features">Features</a>
+    <a href="#how-it-works">How It Works</a>
+    <a href="#pricing">Pricing</a>
+    <a href="#api-quickstart">API</a>
+    <a href="#contact">Contact</a>
+  </div>
+</nav>
+
+</div>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="container">
+    <h1>Human Judgment<br>for AI Agents</h1>
+    <p>
+      Verifi connects AI agents to real human responders at critical decision
+      points. No automated rules, no gating: when your agent asks, a person
+      reviews and answers.
+    </p>
+    <div class="hero-buttons">
+      <a href="#api-quickstart" class="btn btn-primary">Get Started</a>
+      <a href="#pricing" class="btn btn-secondary">See Pricing</a>
+    </div>
+  </div>
+</section>
+
+<!-- Features -->
+<section id="features">
+  <div class="container">
+    <div class="section-label">Platform</div>
+    <h2 class="section-title">Built for agentic workflows</h2>
+    <p class="section-sub">
+      Verifi plugs into any AI agent stack with a single HTTP call. No SDK required.
+    </p>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon">🔐</div>
+        <h3>Human-in-the-Loop</h3>
+        <p>
+          Route agent decisions to a real human when you need judgment a model
+          cannot provide. Every verify is logged and auditable.
+        </p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">⚡</div>
+        <h3>One Call, Simple API</h3>
+        <p>
+          POST intent and claim. A human reviews the context, responds, and
+          your agent receives the verified result. No complex configuration.
+        </p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🛡️</div>
+        <h3>Built-in Safeguards</h3>
+        <p>
+          Unlawful and abusive requests are rejected under a clear policy.
+          Everything else is answered by a real human, and every step is logged.
+        </p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">👤</div>
+        <h3>Trusted Responders</h3>
+        <p>
+          When your agent needs human judgment, a responder reviews the
+          context and returns a decision. Start free, then pay per verify.
+        </p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📊</div>
+        <h3>Real-Time Dashboard</h3>
+        <p>
+          Monitor verification volume, response times, human decisions, and
+          agent activity from a single dashboard.
+        </p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔗</div>
+        <h3>Full Audit Trail</h3>
+        <p>
+          Every request and every human response is recorded and signed.
+          Verify history is exportable at any time.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- How It Works -->
+<section id="how-it-works">
+  <div class="container">
+    <div class="section-label">Workflow</div>
+    <h2 class="section-title">How it works</h2>
+    <p class="section-sub">
+      A simple three-step loop that adds human judgment to any autonomous agent.
+    </p>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <h3>Agent Sends a Request</h3>
+        <p>Your agent calls Verifi with an intent (what it wants to do) and a claim (what it needs verified). A human reviews every legitimate request.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <h3>Human Reviews &amp; Responds</h3>
+        <p>A human responder reviews the context and makes the judgment call. Requests that violate policy are rejected instead of answered.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <h3>Agent Receives the Result</h3>
+        <p>The verified response flows back to your agent with full traceability, in the same HTTP call when the human answers within the wait window.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Pricing -->
+<section id="pricing">
+  <div class="container">
+    <div class="section-label">Pricing</div>
+    <h2 class="section-title">Simple, usage-based pricing</h2>
+    <p class="section-sub">
+      Start for free. Scale when you need human responders at volume.
+    </p>
+    <div class="pricing-grid">
+      <div class="pricing-card">
+        <div class="plan-name">Free</div>
+        <div class="price">$0 <span>/mo</span></div>
+        <div class="price-sub">For evaluation and small-scale agents</div>
+        <ul>
+          <li>5 verifies per wallet address</li>
+          <li>Human response included</li>
+          <li>Basic audit log</li>
+          <li>Community support</li>
+        </ul>
+        <a href="#api-quickstart" class="btn btn-secondary">Start Free</a>
+      </div>
+      <div class="pricing-card featured">
+        <div class="badge">Popular</div>
+        <div class="plan-name">Pay as You Go</div>
+        <div class="price">$0.10 <span>/verify</span></div>
+        <div class="price-sub">Paid with x402: USDC on Base, no account needed.</div>
+        <ul>
+          <li>Unlimited verifies ($0.10 each)</li>
+          <li>Human response included automatically</li>
+          <li>Payment settles on-chain via x402</li>
+          <li>Full audit trail</li>
+          <li>Real-time dashboard</li>
+        </ul>
+        <a href="#api-quickstart" class="btn btn-primary">Get Started</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- API Quickstart -->
+<section id="api-quickstart">
+  <div class="container">
+    <div class="section-label">Quickstart</div>
+    <h2 class="section-title">One curl command</h2>
+    <p class="section-sub">
+      Send an intent and a claim. A human reviews it and returns a verdict.
+    </p>
+    <div class="code-block">
+<pre>
+<span class="cm"># Ask a human to verify a claim. Your wallet address = 5 free verifies.</span>
+curl -X POST https://verifi.cloud/verify \
+  -H <span class="str">"Content-Type: application/json"</span> \
+  -d <span class="str">'{
+  "intent": "send_email",
+  "claim": "The user explicitly opted in and confirmed their
+  email address via double opt-in on 2026-07-15.",
+  "agent_id": "0xYourWalletAddress"
+}'</span>
+
+<span class="cm"># The call waits while a human answers (up to ~110 s).</span>
+<span class="cm"># Answered in time -> HTTP 200 with the human verdict:</span>
+{
+  <span class="pu">"verify_id"</span>: <span class="str">"a1b2c3d4-..."</span>,
+  <span class="pu">"status"</span>: <span class="str">"accepted"</span>,
+  <span class="pu">"response"</span>: <span class="str">"accepted"</span>,
+  <span class="pu">"tier"</span>: <span class="str">"free"</span>
+}
+<span class="cm"># Still pending -> HTTP 202, poll GET /verify/{verify_id}</span>
+
+<span class="cm"># After your 5 free verifies: same call returns HTTP 402 with</span>
+<span class="cm"># x402 payment instructions (USDC on Base). Any x402 v2 client</span>
+<span class="cm"># pays automatically. Docs: verifi.cloud/docs</span>
+</pre>
+    </div>
+  </div>
+</section>
+
+<!-- Contact Form -->
+<section id="contact">
+  <div class="container">
+    <div class="section-label">Contact</div>
+    <h2 class="section-title">Get in touch</h2>
+    <p class="section-sub">
+      Questions about integration, pricing, or partnership? We read every message.
+    </p>
+    <div class="contact-form">
+      <div class="form-group">
+        <label for="cf-name">Name</label>
+        <input type="text" id="cf-name" placeholder="Your name" maxlength="200" required>
+      </div>
+      <div class="form-group">
+        <label for="cf-email">Email</label>
+        <input type="email" id="cf-email" placeholder="you@example.com" maxlength="300" required>
+      </div>
+      <div class="form-group">
+        <label for="cf-message">Message</label>
+        <textarea id="cf-message" placeholder="How can we help you?" maxlength="5000" required></textarea>
+      </div>
+      <button class="btn btn-primary" id="cf-submit" style="width:100%;justify-content:center">Send Message</button>
+      <div class="form-status" id="cf-status"></div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<div class="container">
+  <div class="cta-section">
+    <h2>Ready to add human judgment to your agent?</h2>
+    <p>Integrate in minutes. Your first 5 verifies are on us with no credit card required.</p>
+    <a href="#api-quickstart" class="btn btn-primary">Get Started</a>
+  </div>
+</div>
+
+<!-- Footer -->
+<footer>
+  <div class="container">
+    <div class="logo">verifi<span>.</span></div>
+    <div class="footer-links">
+      <a href="#contact">Contact</a>
+      <a href="#">Privacy</a>
+      <a href="#">Terms</a>
+    </div>
+    <div class="copy">&copy; 2026 Verifi. All rights reserved.</div>
+  </div>
+</footer>
+
+</div>
+
+<script>
+(function() {
+  const form = document.querySelector('.contact-form');
+  const nameInput = document.getElementById('cf-name');
+  const emailInput = document.getElementById('cf-email');
+  const msgInput = document.getElementById('cf-message');
+  const submitBtn = document.getElementById('cf-submit');
+  const statusEl = document.getElementById('cf-status');
+
+  function setStatus(type, text) {
+    statusEl.className = 'form-status ' + type;
+    statusEl.textContent = text;
+    statusEl.style.display = 'block';
+  }
+
+  submitBtn.addEventListener('click', async function() {
+    const name = nameInput.value.trim();
+    const email = emailInput.value.trim();
+    const message = msgInput.value.trim();
+
+    if (!name || !email || !message) {
+      setStatus('error', 'Please fill in all fields.');
+      return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Sending...';
+    setStatus('', '');
+
+    try {
+      const resp = await fetch('/contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, message }),
+      });
+      const data = await resp.json();
+
+      if (resp.ok && data.ok) {
+        setStatus('success', 'Thank you! We will get back to you soon.');
+        nameInput.value = '';
+        emailInput.value = '';
+        msgInput.value = '';
+      } else {
+        setStatus('error', 'Something went wrong. Please try again later.');
+      }
+    } catch (err) {
+      setStatus('error', 'Connection error. Please try again.');
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Send Message';
+    }
+  });
+})();
+</script>
+
+</body>
+</html>

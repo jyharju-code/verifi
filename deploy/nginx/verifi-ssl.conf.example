@@ -1,0 +1,57 @@
+# Move this into conf.d/ as verifi-ssl.conf AFTER certbot has issued the
+# certificate, then reload nginx. Also add to the port 80 server:
+#   location / { return 301 https://verifi.cloud$request_uri; }
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name verifi.cloud;
+
+    ssl_certificate     /etc/letsencrypt/live/verifi.cloud/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/verifi.cloud/privkey.pem;
+
+    resolver 127.0.0.11 valid=10s;
+
+    location = /bot {
+        set $bot_upstream bot:8701;
+        proxy_pass http://$bot_upstream/bot;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /verify {
+        set $verify_upstream verify-api:8702;
+        proxy_pass http://$verify_upstream;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 180s;
+    }
+
+    location = /verify-api/health {
+        set $verify_upstream verify-api:8702;
+        proxy_pass http://$verify_upstream/health;
+    }
+
+    # MCP server (Streamable HTTP)
+    location /mcp {
+        set $mcp_upstream mcp:8704;
+        proxy_pass http://$mcp_upstream;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 180s;
+        proxy_buffering off;
+    }
+
+    location /admin {
+        set $core_upstream core-api:8700;
+        proxy_pass http://$core_upstream;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location = / {
+        return 200 'Verifi: verified human loops for AI agents. API: POST /verify\n';
+        add_header Content-Type text/plain;
+    }
+}
