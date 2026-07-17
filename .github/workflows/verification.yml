@@ -21,9 +21,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: instances/verify-api/package-lock.json
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install Verify API dependencies
+        run: npm ci --prefix instances/verify-api
       - name: Verify the API contract
         run: node --test instances/verify-api/routes/verify.test.js
       - name: Compile Python services
