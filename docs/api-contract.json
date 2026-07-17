@@ -1,0 +1,21 @@
+{
+  "contractVersion": 2,
+  "currency": "USDC",
+  "network": "eip155:8453",
+  "entryPrice": "0.10",
+  "unlockPrice": "2.90",
+  "totalPrice": "3.00",
+  "fullFreeChainsPerWallet": 5,
+  "failureCredit": {
+    "entryValue": "0.10",
+    "coversUnlock": false
+  },
+  "agentStatuses": ["processing", "ready", "failed", "completed"],
+  "pollRetryAfterSeconds": 15,
+  "humanTimeoutMinutes": 60,
+  "endpoints": {
+    "submit": "POST /verify",
+    "poll": "GET /verify/{verify_id}",
+    "unlock": "POST /verify-unlock?id={verify_id}"
+  }
+}

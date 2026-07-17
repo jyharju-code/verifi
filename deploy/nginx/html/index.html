@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Verifi — Verified Human Loops for AI Agents</title>
+<title>Verifi: Verified Human Loops for AI Agents</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -393,7 +393,7 @@
       <div class="step">
         <div class="step-num">1</div>
         <h3>Agent Sends a Request</h3>
-        <p>Your agent calls Verifi with an intent (what it wants to do) and a claim (what it needs verified). A human reviews every legitimate request.</p>
+        <p>Your agent calls Verifi with an intent and a claim. A free entitlement or the 0.10 USDC entry payment admits it to the human queue.</p>
       </div>
       <div class="step">
         <div class="step-num">2</div>
@@ -403,7 +403,7 @@
       <div class="step">
         <div class="step-num">3</div>
         <h3>Agent Receives the Result</h3>
-        <p>The verified response flows back to your agent with full traceability, in the same HTTP call when the human answers within the wait window.</p>
+        <p>Your agent polls until the result is ready, then unlocks it through the separate 2.90 USDC gate. Free chains perform the same unlock for $0.</p>
       </div>
     </div>
   </div>
@@ -423,9 +423,9 @@
         <div class="price">$0 <span>/mo</span></div>
         <div class="price-sub">For evaluation and small-scale agents</div>
         <ul>
-          <li>5 verifies per wallet address</li>
-          <li>Human response included</li>
-          <li>Basic audit log</li>
+          <li>5 complete chains per wallet address</li>
+          <li>Both 0.10 and 2.90 USDC gates free</li>
+          <li>Same polling and unlock workflow</li>
           <li>Community support</li>
         </ul>
         <a href="#api-quickstart" class="btn btn-secondary">Start Free</a>
@@ -433,12 +433,12 @@
       <div class="pricing-card featured">
         <div class="badge">Popular</div>
         <div class="plan-name">Pay as You Go</div>
-        <div class="price">$0.10 <span>/verify</span></div>
-        <div class="price-sub">Paid with x402: USDC on Base, no account needed.</div>
+        <div class="price">$3.00 <span>/completed chain</span></div>
+        <div class="price-sub">$0.10 entry, then $2.90 result unlock via x402.</div>
         <ul>
-          <li>Unlimited verifies ($0.10 each)</li>
-          <li>Human response included automatically</li>
-          <li>Payment settles on-chain via x402</li>
+          <li>Nothing enters the queue before gate 1</li>
+          <li>Ready results unlock through gate 2</li>
+          <li>Two auditable on-chain settlements</li>
           <li>Full audit trail</li>
           <li>Real-time dashboard</li>
         </ul>
@@ -452,13 +452,13 @@
 <section id="api-quickstart">
   <div class="container">
     <div class="section-label">Quickstart</div>
-    <h2 class="section-title">One curl command</h2>
+    <h2 class="section-title">Submit, poll, unlock</h2>
     <p class="section-sub">
       Send an intent and a claim. A human reviews it and returns a verdict.
     </p>
     <div class="code-block">
 <pre>
-<span class="cm"># Ask a human to verify a claim. Your wallet address = 5 free verifies.</span>
+<span class="cm"># Your wallet address receives 5 complete free chains.</span>
 curl -X POST https://verifi.cloud/verify \
   -H <span class="str">"Content-Type: application/json"</span> \
   -d <span class="str">'{
@@ -468,20 +468,17 @@ curl -X POST https://verifi.cloud/verify \
   "agent_id": "0xYourWalletAddress"
 }'</span>
 
-<span class="cm"># Free calls wait while a human answers (up to ~110 s).</span>
-<span class="cm"># Answered in time -> HTTP 200 with the human verdict:</span>
+<span class="cm"># Every admitted call returns HTTP 202 with a durable id.</span>
 {
   <span class="pu">"verify_id"</span>: <span class="str">"a1b2c3d4-..."</span>,
-  <span class="pu">"status"</span>: <span class="str">"accepted"</span>,
-  <span class="pu">"response"</span>: <span class="str">"accepted"</span>,
-  <span class="pu">"tier"</span>: <span class="str">"free"</span>
+  <span class="pu">"status"</span>: <span class="str">"processing"</span>,
+  <span class="pu">"next_action"</span>: <span class="str">"poll"</span>,
+  <span class="pu">"retry_after_seconds"</span>: 15
 }
-<span class="cm"># Still pending -> HTTP 202, poll GET /verify/{verify_id}</span>
-
-<span class="cm"># After your 5 free verifies: same call returns HTTP 402 with</span>
-<span class="cm"># x402 payment instructions (USDC on Base). Any x402 v2 client</span>
-<span class="cm"># pays automatically, then receives HTTP 202 + verify_id.</span>
-<span class="cm"># Poll GET /verify/{verify_id} or provide callback_url.</span>
+<span class="cm"># Poll GET /verify/{verify_id}, for minutes if needed.</span>
+<span class="cm"># When status is ready, POST /verify-unlock?id={verify_id}.</span>
+<span class="cm"># Paid: 0.10 USDC to enter, then a new 2.90 USDC unlock.</span>
+<span class="cm"># Free: both explicit gates cost 0.00 USDC.</span>
 <span class="cm"># Docs: verifi.cloud/docs</span>
 </pre>
     </div>
@@ -519,7 +516,7 @@ curl -X POST https://verifi.cloud/verify \
 <div class="container">
   <div class="cta-section">
     <h2>Ready to add human judgment to your agent?</h2>
-    <p>Integrate in minutes. Your first 5 verifies are on us with no credit card required.</p>
+    <p>Integrate in minutes. Your first 5 complete chains, including result unlock, are on us.</p>
     <a href="#api-quickstart" class="btn btn-primary">Get Started</a>
   </div>
 </div>

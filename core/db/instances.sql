@@ -14,6 +14,6 @@ CREATE TABLE IF NOT EXISTS instances (
 
 INSERT INTO instances (id, name, price_per_verify, associate_commission, free_tier_count, status)
 VALUES
-    ('verify-api', 'Verify API', 1.00, 0.50, 500, 'active'),
+    ('verify-api', 'Verify API', 3.00, 0.50, 5, 'active'),
     ('atf', 'Ask This Finn', 2.22, 1.00, 0, 'paused')
 ON CONFLICT (id) DO NOTHING;

@@ -19,23 +19,23 @@ small dedicated gas wallet. Revenue settles directly from the buyer to the
 operator's receiving address; the facilitator never holds funds. See
 [WALLETS.md](WALLETS.md).
 
-## Free tier is per wallet address
+## Five full-free chains per wallet
 
-5 free verifies per `agent_id` (a wallet-formatted address), computed from
-the verifies table, not from a global pool. The address is self-reported at
-the free tier, which is an accepted limitation of a free allowance: rotating
-addresses buys more free verifies but each one still faces the queue rules
-below.
+Each wallet receives five complete free chains. One `initial_free` entitlement
+covers both the 0.10 USDC entry gate and the 2.90 USDC result gate. It does not
+bypass either lifecycle action: free agents submit, poll, and unlock with the
+same statuses and response shape as paid agents. Consumption is stored in
+`wallet_entitlements`, including the wallet, free-use number, and verify id.
 
-## Paid state follows settlement, not creation
+## Admission follows settlement, not creation
 
 The x402 Express middleware settles while the response is being finalized.
-A paid verify is therefore created with `unlock_paid = false`, and the flag
-flips only when the settlement transaction is recorded. This came from a
-real incident: a client connection aborted mid-request and the settlement
-landed seconds after the socket closed. Settlement capture listens to both
-`finish` and `close` with retry backoff, and a missed capture logs loudly
-for manual reconciliation.
+A paid verify is first persisted as `admission_pending`. It does not enter the
+human queue until the 0.10 USDC transaction is recorded. This came from a real
+incident: a client connection aborted mid-request and the settlement landed
+seconds after the socket closed. Settlement capture listens to both `finish`
+and `close` with retry backoff, and a missed capture logs loudly for manual
+reconciliation.
 
 ## Structured verdicts without invented confidence
 
@@ -52,21 +52,20 @@ one pending verify per `agent_id` (429, checked before the payment path so
 nobody pays into a rejection), a global pending cap (503 + Retry-After),
 and a 60 minute expiry per verify.
 
-## Expired paid verifies auto-credit
+## Failed admitted verifies grant entry credit
 
-If a paid verify expires unanswered, money was taken without delivering.
-Each expired paid verify permanently adds one free verify for that wallet
-address. No refund transfers, no new tables: the credit is computed inside
-the quota query.
+If an admitted verify expires or otherwise fails without a redeemable result,
+the wallet receives one `failure_credit` entitlement worth 0.10 USDC. It pays
+only the next entry gate. It never pays the 2.90 USDC result gate. The ledger
+links the credit to both its failed source verify and its consuming verify.
 
-## Unlock as a recovery path, not a product step
+## Unlock is the second product gate
 
-Paid responses unlock automatically when settlement lands. `unlock_paid`
-can only be false when a settlement failed after creation, and
-`POST /verify-unlock?id=...` (x402-paid) exists to recover exactly that
-case. Pre-checks run before the payment middleware so nobody pays for an
-impossible or unnecessary unlock. The canonical path uses a query parameter
-because the x402 route matcher does not support path parameters.
+Every ready response is locked. `POST /verify-unlock?id=...` is a required
+second action. Paid and entry-credit chains settle a new 2.90 USDC x402
+payment. A full-free chain uses the same endpoint but consumes the second half
+of its original entitlement for 0.00 USDC. Pre-checks run before payment so no
+one pays for a pending, failed, or already completed result.
 
 ## Webhooks with strict SSRF rules
 
@@ -75,18 +74,16 @@ Optional `callback_url` delivery on resolution or expiry: https only, port
 disabled, three attempts with backoff. Polling always remains available, so
 webhook failure never strands a result.
 
-## Paid verifies settle before the human wait
+## All verifies are asynchronous and pollable
 
-The x402 Express middleware settles when the route ends its response. Holding
-a paid response open while a human works can therefore charge the buyer after
-the client connection has already closed, leaving the buyer without a
-`verify_id`. Paid `POST /verify` calls always return `202` with a durable id as
-soon as settlement completes. The human result is then retrieved with
-`GET /verify/{id}` or delivered to `callback_url`. Free verifies may still use
-the synchronous wait because no payment can be stranded.
+Holding a request open assumes a human deadline that the product cannot
+promise. Every admitted `POST /verify` returns `202` with a durable id. Agents
+poll `GET /verify/{id}` through `processing`, `ready`, `failed`, and
+`completed`. `retry_after_seconds` controls polling cadence. A callback is an
+optional ready or failed notification, never the only delivery path.
 
-## MCP surface covers the free tier
+## MCP surface covers full-free chains
 
-The MCP server reuses the public Verify API inside the compose network, so
-quotas and caps apply identically. The x402-paid tier runs over plain HTTP;
-x402-over-MCP can be added when agents ask for it.
+The MCP server reuses the public Verify API inside the compose network. Its
+submit, poll, and unlock tools cover the five full-free chains. Paid x402 gates
+run over plain HTTP; x402-over-MCP can be added when agents ask for it.

@@ -78,7 +78,7 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       FREE_COMMISSION_USD: ${FREE_COMMISSION_USD:-0.50}
       MAX_PENDING_TOTAL: ${MAX_PENDING_TOTAL:-25}
-    command: ["uvicorn", "core.api.server:app", "--host", "0.0.0.0", "--port", "8700"]
+    command: ["sh", "-c", "python -m core.db.migrate && exec uvicorn core.api.server:app --host 0.0.0.0 --port 8700"]
 
   bot:
     profiles: ["bot"]
@@ -114,10 +114,9 @@ services:
       PORT: "8702"
       CORE_API_URL: http://core-api:8700
       INSTANCE_ID: verify-api
-      VERIFY_WAIT_TIMEOUT_S: ${VERIFY_WAIT_TIMEOUT_S:-110}
       X402_PAY_TO: ${X402_PAY_TO:-}
-      X402_PRICE: ${X402_PRICE:-$$0.10}
-      X402_UNLOCK_PRICE: ${X402_UNLOCK_PRICE:-$$3.00}
+      X402_ENTRY_PRICE: ${X402_ENTRY_PRICE:-$$0.10}
+      X402_UNLOCK_PRICE: ${X402_UNLOCK_PRICE:-$$2.90}
       X402_NETWORK: ${X402_NETWORK:-eip155:8453}
       FACILITATOR_URL: ${FACILITATOR_URL:-https://x402.org/facilitator}
       CDP_API_KEY_ID: ${CDP_API_KEY_ID:-}
@@ -165,6 +164,7 @@ services:
       - "443:443"
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/html:/var/www/verifi:ro
       - certbot-etc:/etc/letsencrypt
       - certbot-web:/var/www/certbot
     depends_on:

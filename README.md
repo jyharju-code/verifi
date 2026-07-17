@@ -6,7 +6,7 @@ Live at **[verifi.cloud](https://verifi.cloud)** · [API docs](https://verifi.cl
 
 ## Why
 
-Every agent framework hits the same wall: the agent cannot trust its own output. Verifi puts a human judgment call one HTTP request away, priced for machines ($0.10), paid the way agents pay (x402), and fast enough to sit inside an agent loop (median human answer so far: well under a minute).
+Every agent framework hits the same wall: the agent cannot trust its own output. Verifi gives the agent a durable human workflow, paid the way agents pay (x402), and designed to remain reliable when a good answer takes several minutes.
 
 ## How it works
 
@@ -17,10 +17,11 @@ agent ──POST /verify──▶ verify-api ──▶ core engine ──▶ Tel
   └──────── answer ◀───────┴───────────────┴───────────────┴───────────────┘
 ```
 
-- **Free tier**: 5 verifies per wallet address (`agent_id`). The answer is always included.
-- **Paid tier**: after the free quota, the same POST returns `402 Payment Required` with x402 v2 payment instructions. Any x402 client (`@x402/fetch`) completes the handshake automatically. The buyer wallet needs zero ETH (EIP-3009), and settlement goes directly on-chain to the operator's address through a **self-hosted open-source facilitator** ([x402-rs](https://github.com/x402-rs/x402-rs)).
-- **Reliable delivery**: free calls may wait up to 110 s for the human. Paid calls return `202` with a durable `verify_id` immediately after x402 settlement, then use polling or the optional `callback_url` webhook for the human result.
-- **MCP**: agents on Claude Code, Cursor, or any MCP client can call the tools `verify_claim`, `get_verify`, and `verifi_info` directly.
+- **Two paid gates**: 0.10 USDC admits the request to the human queue. When polling reports `ready`, a new 2.90 USDC payment unlocks the result. Total successful price is 3.00 USDC.
+- **Five full-free chains**: each wallet gets five chains where both gates are free. Submit, polling, human work, statuses, and unlock remain identical to paid chains.
+- **Failure credit**: a failed admitted chain grants one 0.10 USDC entry credit for the next chain. The later 2.90 USDC result gate is not included.
+- **Reliable delivery**: every call returns `202` with a durable `verify_id`. Agents poll through several minutes if necessary, or use the optional ready or failed callback.
+- **MCP**: agents can call `verify_claim`, `get_verify`, `unlock_verify`, and `verifi_info` directly for full-free chains.
 
 ## Repository layout
 
@@ -65,7 +66,7 @@ curl -X POST https://verifi.cloud/verify \
        "agent_id": "0xYourWalletAddress"}'
 ```
 
-Free response: `{"verify_id": "...", "status": "accepted", "verdict": "true", ...}` or `202` + polling. Paid responses always start with `202` + `verify_id`, ensuring the buyer receives a recovery handle before the human work completes. Full reference: [verifi.cloud/docs](https://verifi.cloud/docs/).
+Every admitted response starts with `202` and `status: "processing"`. Poll until `ready` or `failed`; a ready result is retrieved through the separate unlock endpoint. The canonical repository reference is [docs/API.md](docs/API.md), rendered at [verifi.cloud/docs](https://verifi.cloud/docs/).
 
 ## License
 

@@ -20,8 +20,8 @@ account.
 
 An x402 payment works like a cheque, but digital and settled in seconds:
 
-1. When an agent calls the API without payment, the service replies with an
-   invoice: this costs 0.10 USDC, payable to this address.
+1. When an agent without an entitlement calls the API, the service replies
+   with the gate 1 invoice: 0.10 USDC, payable to this address.
 2. The agent writes the "cheque": a digitally signed payment authorization
    (EIP-3009) carrying the exact amount, the exact recipient, and a validity
    window. The signature covers all of it, so nobody can alter the amount or
@@ -35,8 +35,11 @@ An x402 payment works like a cheque, but digital and settled in seconds:
 5. The USDC moves directly from the agent's wallet to the operator's
    receiving address. The money never passes through the service and never
    stops in any intermediate account.
-6. Only after the settlement is confirmed does the request continue to a
-   human in Telegram.
+6. Only after the gate 1 settlement is recorded does the request continue to
+   a human in Telegram.
+7. When the human result is ready, the service issues a separate gate 2
+   invoice for 2.90 USDC. A new authorization and settlement unlocks the
+   result. The two transactions share one verify id but are not one payment.
 
 One settlement costs fractions of a cent on Base, so a 15 euro gas till
 covers thousands of payments.
@@ -61,10 +64,11 @@ operator's encrypted OS keychain. Both wallets were generated
 programmatically, so the keys have never passed through a browser.
 
 **Every transaction is recorded twice.** The blockchain itself is a public
-receipt for every transfer, and the service's append-only audit log records
-every paid verify, price change, and settlement.
+receipt for every transfer, and PostgreSQL records each entry settlement,
+unlock settlement, price, wallet, free entitlement, credit, and lifecycle
+event. The append-only audit log records every money-related transition.
 
-## What happens when an agent pays for one verify
+## What happens when an agent pays for one complete chain
 
 1. Agent: POST /verify with the claim.
 2. Service: 402 Payment Required with the invoice.
@@ -73,9 +77,19 @@ every paid verify, price change, and settlement.
 5. The facilitator verifies it and submits the transfer; gas comes from the
    gas wallet.
 6. 0.10 USDC moves from the agent directly to the receiving address.
-7. The verify is created, the card lands in a responder's Telegram, and the
-   answer returns to the agent in the same HTTP request (or via polling and
-   webhooks if the human takes longer).
+7. The durable verify id returns and the agent polls while a human works.
+8. Polling reports `ready`, with the answer still locked.
+9. The agent calls the unlock endpoint, signs a new 2.90 USDC authorization,
+   and the facilitator settles the second transaction.
+10. The completed response contains the answer. Total charged is 3.00 USDC.
+
+## Free chains and failure credits
+
+The first five chains per wallet are free in full. One entitlement covers the
+0.10 and 2.90 USDC gates while preserving the same submit, poll, and unlock
+sequence. If admitted work fails without a redeemable result, the wallet gets
+one entry-only credit. It replaces the next 0.10 USDC payment but does not
+replace the later 2.90 USDC unlock payment.
 
 ## Maintenance
 

@@ -22,11 +22,14 @@ second. Think Shopify: the platform powers many stores.
 - Internal services bind to the docker network or localhost only; nginx is
   the single public surface. Docker published ports bypass UFW, so
   localhost binding is the real firewall.
-- The x402 middleware settles during the response: never treat a paid verify
-  as paid at creation time. unlock_paid flips when the settlement is
-  recorded.
+- The x402 middleware settles during the response. A paid verify starts in
+  admission_pending and must not enter the human queue until the 0.10 USDC
+  entry settlement is recorded. A ready result remains locked until its
+  separate 2.90 USDC settlement is recorded.
 - Schema changes ship as idempotent migrations in core/db/migrations/ and
-  are reflected in the base schema files.
+  are reflected in the base schema files. The core API runs
+  `python -m core.db.migrate` before startup and records applied files in
+  `schema_migrations`.
 
 ## Operations
 
