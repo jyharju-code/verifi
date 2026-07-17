@@ -70,13 +70,11 @@ async def admin_data(request: Request) -> JSONResponse:
     )
     money = await db.fetchrow(
         """
-        SELECT COALESCE((SELECT sum(i.price_per_verify)
-                         FROM verifies v JOIN instances i ON i.id = v.instance
-                         WHERE v.tier = 'paid'), 0) AS revenue_total,
-               COALESCE((SELECT sum(i.price_per_verify)
-                         FROM verifies v JOIN instances i ON i.id = v.instance
-                         WHERE v.tier = 'paid'
-                           AND v.created_at >= date_trunc('week', now())), 0) AS revenue_week,
+        SELECT COALESCE((SELECT sum(entry_charged_usdc + unlock_charged_usdc)
+                         FROM verifies), 0) AS revenue_total,
+               COALESCE((SELECT sum(entry_charged_usdc + unlock_charged_usdc)
+                         FROM verifies
+                         WHERE created_at >= date_trunc('week', now())), 0) AS revenue_week,
                COALESCE((SELECT sum(earnings - paid_total) FROM associates
                          WHERE status <> 'removed'), 0) AS owed
         """
@@ -107,8 +105,21 @@ async def admin_data(request: Request) -> JSONResponse:
     )
     recent = await db.fetch(
         """
-        SELECT verify_no, instance, tier, status, response_time_ms, created_at
+        SELECT verify_no, id, instance, agent_id, intent, claim, tier, status,
+               entry_source, entry_list_price_usdc, entry_charged_usdc,
+               unlock_source, unlock_list_price_usdc, unlock_charged_usdc,
+               free_use_number, failure_credit_granted,
+               x402_payment_tx, x402_unlock_tx, response_time_ms, created_at
         FROM verifies ORDER BY created_at DESC LIMIT 15
+        """
+    )
+    entitlements = await db.fetch(
+        """
+        SELECT e.id, e.instance, e.wallet_address, e.kind, e.covers_entry,
+               e.covers_unlock, e.free_use_number, e.source_verify_id,
+               e.consumed_by_verify_id, e.granted_at, e.consumed_at
+        FROM wallet_entitlements e
+        ORDER BY e.granted_at DESC, e.id DESC LIMIT 50
         """
     )
     instances = await db.fetch(
@@ -159,13 +170,44 @@ async def admin_data(request: Request) -> JSONResponse:
             "recent": [
                 {
                     "verify_no": r["verify_no"],
+                    "verify_id": str(r["id"]),
                     "instance": r["instance"],
+                    "wallet_address": r["agent_id"],
+                    "intent": r["intent"],
+                    "claim": r["claim"],
                     "tier": r["tier"],
                     "status": r["status"],
+                    "entry_source": r["entry_source"],
+                    "entry_list_price_usdc": float(r["entry_list_price_usdc"]),
+                    "entry_charged_usdc": float(r["entry_charged_usdc"]),
+                    "unlock_source": r["unlock_source"],
+                    "unlock_list_price_usdc": float(r["unlock_list_price_usdc"]),
+                    "unlock_charged_usdc": float(r["unlock_charged_usdc"]),
+                    "total_charged_usdc": float(r["entry_charged_usdc"] + r["unlock_charged_usdc"]),
+                    "free_use_number": r["free_use_number"],
+                    "failure_credit_granted": r["failure_credit_granted"],
+                    "entry_transaction": r["x402_payment_tx"],
+                    "unlock_transaction": r["x402_unlock_tx"],
                     "response_time_ms": r["response_time_ms"],
                     "created_at": r["created_at"].isoformat(),
                 }
                 for r in recent
+            ],
+            "entitlements": [
+                {
+                    "id": r["id"],
+                    "instance": r["instance"],
+                    "wallet_address": r["wallet_address"],
+                    "kind": r["kind"],
+                    "covers_entry": r["covers_entry"],
+                    "covers_unlock": r["covers_unlock"],
+                    "free_use_number": r["free_use_number"],
+                    "source_verify_id": str(r["source_verify_id"]) if r["source_verify_id"] else None,
+                    "consumed_by_verify_id": str(r["consumed_by_verify_id"]) if r["consumed_by_verify_id"] else None,
+                    "granted_at": r["granted_at"].isoformat(),
+                    "consumed_at": r["consumed_at"].isoformat() if r["consumed_at"] else None,
+                }
+                for r in entitlements
             ],
             "instances": [
                 {
@@ -391,7 +433,16 @@ DASHBOARD_HTML = """<!doctype html>
 <h2>Viimeisimmät verifyt</h2>
 <div class="card" style="overflow-x:auto">
   <table id="recentTable"><thead><tr>
-    <th>#</th><th>Instanssi</th><th>Taso</th><th>Tila</th><th class="num">Vastausaika</th><th>Luotu</th>
+    <th>#</th><th>Lompakko</th><th>Pyyntö</th><th>Tila</th><th>Sisäänpääsy</th>
+    <th>Lunastus</th><th class="num">Veloitettu</th><th>Luotu</th>
+  </tr></thead><tbody></tbody></table>
+</div>
+
+<h2>Ilmaiskäytöt ja krediitit</h2>
+<div class="card" style="overflow-x:auto">
+  <table id="entitlementTable"><thead><tr>
+    <th>Aika</th><th>Lompakko</th><th>Tyyppi</th><th>Kattavuus</th>
+    <th>Lähde</th><th>Käytetty ketjuun</th>
   </tr></thead><tbody></tbody></table>
 </div>
 
@@ -403,7 +454,7 @@ DASHBOARD_HTML = """<!doctype html>
   </tr></thead><tbody></tbody></table>
   <div class="muted" style="font-size:11px;margin-top:6px">
     Hinta ja palkkio tallentuvat kantaan heti. Alustalle = hinta miinus palkkio.
-    Kun x402-maksut ovat käytössä, hinnan muutos vaatii lisäksi verify-apin X402_PRICE-päivityksen.
+    Sopimushinnan muutos vaatii lisäksi X402_ENTRY_PRICE ja X402_UNLOCK_PRICE päivitykset sekä uuden API-sopimusversion.
   </div>
 </div>
 
@@ -420,11 +471,13 @@ DASHBOARD_HTML = """<!doctype html>
 const money = v => "$" + v.toFixed(2);
 const secs = ms => ms == null ? "ei dataa" : (ms/1000).toFixed(1) + " s";
 const STATUS = {
+  admission_pending: { fi: "maksu vahvistuu", color: "var(--warning)", icon: "\\u23F3" },
   pending:  { fi: "jonossa",     color: "var(--warning)",  icon: "\\u23F3" },
   accepted: { fi: "hyväksytty",  color: "var(--good)",     icon: "\\u2705" },
   refined:  { fi: "tarkennettu", color: "var(--good)",     icon: "\\u{1F4DD}" },
   rejected: { fi: "hylätty",     color: "var(--critical)", icon: "\\u274C" },
   expired:  { fi: "vanhentunut", color: "var(--serious)",  icon: "\\u231B" },
+  failed:   { fi: "epäonnistui", color: "var(--critical)", icon: "\\u274C" },
 };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
@@ -513,12 +566,27 @@ async function refresh() {
       `<td class="num">${(a.accuracy * 100).toFixed(0)} %</td>` +
       `<td class="num">${money(a.earnings)}</td><td class="num">${money(a.pending_balance)}</td></tr>`;
   }).join("") || `<tr><td colspan="7" class="muted">Ei vielä associateja. Lisää botissa: /lisaa @nimi</td></tr>`;
-  document.querySelector("#recentTable tbody").innerHTML = data.recent.map(v =>
-    `<tr><td>#V-${v.verify_no}</td><td>${esc(v.instance)}</td>` +
-    `<td>${v.tier === "paid" ? "maksullinen" : "ilmainen"}</td>` +
-    `<td>${statusCell(v.status)}</td><td class="num">${secs(v.response_time_ms)}</td>` +
-    `<td class="muted">${new Date(v.created_at).toLocaleString("fi-FI")}</td></tr>`
-  ).join("") || `<tr><td colspan="6" class="muted">Ei vielä verifyjä.</td></tr>`;
+  document.querySelector("#recentTable tbody").innerHTML = data.recent.map(v => {
+    const wallet = v.wallet_address ? v.wallet_address.slice(0, 6) + "..." + v.wallet_address.slice(-4) : "puuttuu";
+    const entry = v.entry_source === "initial_free" ? `ilmainen ${v.free_use_number}/5`
+      : v.entry_source === "failure_credit" ? "krediitti" : "x402";
+    const unlock = v.unlock_source || (v.status === "accepted" || v.status === "rejected" || v.status === "refined" ? "odottaa" : "ei vielä");
+    return `<tr><td>#V-${v.verify_no}</td><td title="${esc(v.wallet_address)}">${esc(wallet)}</td>` +
+      `<td class="details-cell" title="${esc(v.intent + ": " + v.claim)}">${esc(v.intent)}: ${esc(v.claim)}</td>` +
+      `<td>${statusCell(v.status)}</td><td>${esc(entry)} (${money(v.entry_charged_usdc)})</td>` +
+      `<td>${esc(unlock)} (${money(v.unlock_charged_usdc)})</td>` +
+      `<td class="num">${money(v.total_charged_usdc)}</td>` +
+      `<td class="muted">${new Date(v.created_at).toLocaleString("fi-FI")}</td></tr>`;
+  }).join("") || `<tr><td colspan="8" class="muted">Ei vielä verifyjä.</td></tr>`;
+  document.querySelector("#entitlementTable tbody").innerHTML = data.entitlements.map(e => {
+    const wallet = e.wallet_address.slice(0, 6) + "..." + e.wallet_address.slice(-4);
+    const kind = e.kind === "initial_free" ? `ilmainen ${e.free_use_number}/5` : "epäonnistumiskrediitti";
+    const coverage = e.covers_unlock ? "0,10 + 2,90 USDC" : "0,10 USDC";
+    return `<tr><td class="muted">${new Date(e.granted_at).toLocaleString("fi-FI")}</td>` +
+      `<td title="${esc(e.wallet_address)}">${esc(wallet)}</td><td>${esc(kind)}</td>` +
+      `<td>${coverage}</td><td>${esc(e.source_verify_id || "alkukiintiö")}</td>` +
+      `<td>${esc(e.consumed_by_verify_id || "käyttämättä")}</td></tr>`;
+  }).join("") || `<tr><td colspan="6" class="muted">Ei vielä ilmaiskäyttöjä tai krediittejä.</td></tr>`;
   renderInstances(data.instances);
   document.querySelector("#auditTable tbody").innerHTML = data.audit.map(a =>
     `<tr><td class="muted" style="white-space:nowrap">${new Date(a.at).toLocaleString("fi-FI")}</td>` +

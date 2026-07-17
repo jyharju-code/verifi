@@ -1,8 +1,8 @@
-"""Webhook delivery for resolved verifies, with SSRF protection.
+"""Webhook delivery for ready or failed verifies, with SSRF protection.
 
 An agent can pass callback_url when creating a verify. When the verify
-leaves pending (answered or expired), this loop POSTs the public view of
-the result to that URL. At-least-once, 3 attempts with backoff; polling
+becomes ready or fails, this loop POSTs the next action to that URL. Result
+content stays locked until gate 2. At-least-once, 3 attempts with backoff; polling
 GET /verify/{id} always remains available.
 
 SSRF rules (per the Ask This Finn security design): https only, default
@@ -28,28 +28,33 @@ RETRY_BACKOFF_S = [0, 60, 300]
 
 
 def _public_payload(row) -> dict:
-    status = row["status"]
-    if status == "accepted":
-        verdict, explanation = "true", None
-    elif status == "rejected":
-        verdict, explanation = "false", None
-    elif status == "refined":
-        verdict, explanation = "refined", row["response"]
-    else:
-        verdict, explanation = None, None
-    locked = row["tier"] == "paid" and not row["unlock_paid"]
-    return {
-        "event": "verify.resolved",
+    failed = row["status"] in ("expired", "failed")
+    full_free = row["entry_source"] == "initial_free"
+    payload = {
+        "event": "verify.failed" if failed else "verify.ready",
         "verify_id": str(row["id"]),
-        "status": status,
-        "verdict": None if locked else verdict,
-        "explanation": None if locked else explanation,
-        "response": None if locked else row["response"],
-        "response_time_ms": None if locked else row["response_time_ms"],
-        "tier": row["tier"],
-        "unlock_paid": row["unlock_paid"],
+        "status": "failed" if failed else "ready",
+        "verdict": None,
+        "explanation": None,
+        "response": None,
+        "next_action": "stop" if failed else "unlock",
+        "poll_url": f"/verify/{row['id']}",
         "responded_at": row["responded_at"].isoformat() if row["responded_at"] else None,
     }
+    if failed:
+        payload["failure"] = {
+            "reason": row["failure_reason"] or "processing_failed",
+            "entry_credit_granted": row["failure_credit_granted"],
+            "entry_credit_value_usdc": "0.10" if row["failure_credit_granted"] else "0.00",
+        }
+    else:
+        payload["unlock"] = {
+            "method": "POST",
+            "url": f"/verify-unlock?id={row['id']}",
+            "price_usdc": "0.00" if full_free else "2.90",
+            "payment_required": not full_free,
+        }
+    return payload
 
 
 def _ssrf_safe(url: str) -> tuple[bool, str]:
@@ -135,7 +140,7 @@ async def delivery_loop() -> None:
                 WHERE callback_url IS NOT NULL
                   AND callback_delivered = false
                   AND callback_attempts < $1
-                  AND status <> 'pending'
+                  AND status IN ('accepted', 'rejected', 'refined', 'expired', 'failed')
                   AND (callback_last_attempt IS NULL
                        OR callback_last_attempt < now() - make_interval(secs =>
                             CASE callback_attempts WHEN 0 THEN 0 WHEN 1 THEN 60 ELSE 300 END))

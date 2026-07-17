@@ -42,10 +42,15 @@ async def _resolve(conn, verify, status: str, response: str) -> int:
         "verify_resolved",
         {
             "verify_no": verify["verify_no"],
+            "verify_id": str(verify["id"]),
+            "wallet_address": verify["agent_id"],
             "status": status,
+            "agent_status": "ready",
             "response_time_ms": row["response_time_ms"],
             "credited_usd": str(credited),
             "associate_id": verify["associate_id"],
+            "unlock_list_price_usdc": "2.90",
+            "unlock_payment_required": verify["entry_source"] != "initial_free",
         },
     )
     return row["response_time_ms"]

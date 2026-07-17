@@ -1,26 +1,48 @@
-# Verifi
+# Verifi Agent API, contract version 2
 
-> Verified human loops for AI agents. POST an intent and a claim; a real human reviews it and answers (accept, reject, or a refined free-text answer). Pay per verify with the x402 v2 protocol (USDC on Base). 5 free verifies per wallet address.
+Verifi sends agent requests to real humans. Human work can take several minutes. The API is asynchronous and resumable through a durable verify_id.
 
-Base URL: https://verifi.cloud
+Canonical docs: https://verifi.cloud/docs/
 
-## API
+## Required two-gate flow
 
-- POST /verify with JSON {intent, claim, agent_id}. The call waits up to ~110 s for the human answer: 200 with the result, or 202 with verify_id for polling. agent_id is your 0x wallet address and grants 5 free verifies.
-- GET /verify/{verify_id} returns {status, verdict: "true" | "false" | "refined" | null, explanation, response_time_ms, expires_at}.
-- Optional callback_url (https) in the POST body: the result is POSTed there when the verify resolves. Optional ?wait=0..110 shortens the synchronous wait.
-- MCP server (Streamable HTTP): https://verifi.cloud/mcp with tools verify_claim, get_verify, verifi_info.
-- After the free quota the same POST returns 402 with a base64 PAYMENT-REQUIRED header (x402 v2, scheme exact, network eip155:8453, asset USDC 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913, $0.10 per verify). Sign an EIP-3009 authorization and retry with a PAYMENT-SIGNATURE header. The buyer wallet needs no ETH. Compatible with @x402/fetch and any x402 v2 client.
+1. POST /verify with JSON {intent, claim, agent_id, callback_url?}. agent_id is required and must be the requester 0x wallet address.
+2. Gate 1 costs 0.10 USDC through x402. The request does not enter the human queue before settlement. Store verify_id from the 202 response.
+3. Poll GET /verify/{verify_id}. While status is processing, honor retry_after_seconds and poll again. Do not assume a 110 second deadline.
+4. If status is failed, stop. failure.entry_credit_granted reports the 0.10 USDC entry credit.
+5. If status is ready, POST /verify-unlock?id={verify_id}.
+6. Gate 2 is a new 2.90 USDC x402 payment. After settlement the response status is completed and contains the human answer.
 
-## Docs
+Total successful paid price: 0.10 + 2.90 = 3.00 USDC.
 
-- https://verifi.cloud/docs/ : full API reference with curl and Node.js examples
+## Free and credit funding
 
-## Rules
+Every wallet receives five complete free chains. One initial_free entitlement covers both gate 1 and gate 2. The agent still performs the same submit, poll, and unlock actions. There are no queue, human workflow, timing, status, or response-shape differences between free and paid chains.
 
-- One pending verify per agent_id at a time (429 otherwise).
-- 60 minute expiry: unanswered verifies become status expired.
-- Paid responses unlock automatically when the payment settles (unlock_paid: true). POST /verify-unlock?id={verify_id} ($3.00 via x402) is only a recovery path for failed settlements.
-- If a paid verify expires unanswered, the wallet automatically gets one extra free verify as credit.
-- When the human queue is full, POST returns 503 with Retry-After.
-- A real human reads every request: do not spam or resubmit the same claim.
+If an admitted chain fails without a redeemable result, the wallet receives one failure_credit. It covers gate 1 of the next chain, worth 0.10 USDC. It does not cover gate 2, which still costs 2.90 USDC.
+
+## Statuses
+
+- processing: admission is settling or a human is working. Poll again.
+- ready: a human result exists but is locked. Call unlock.
+- failed: no redeemable result will be produced. Stop.
+- completed: gate 2 passed. Use verdict and explanation.
+
+Human verdict vocabulary: true, false, refined. Refined free text is in explanation and response.
+
+## x402
+
+x402 v2, exact scheme, USDC on Base mainnet eip155:8453. Entry and unlock are separate EIP-3009 authorizations, separate settlements, and separate transaction hashes tied to the same verify_id. The buyer needs no ETH. Compatible with @x402/fetch and other x402 v2 clients.
+
+## Reliability and rules
+
+- One active chain per wallet.
+- Unanswered human work expires after 60 minutes.
+- callback_url receives verify.ready or verify.failed, never a locked result. Polling remains authoritative.
+- Queue capacity is checked before gate 1 payment. A 429 or 503 admission response is not charged.
+- GET polling never costs money.
+- MCP endpoint: https://verifi.cloud/mcp with verify_claim, get_verify, unlock_verify, and verifi_info. MCP covers full-free chains; paid x402 uses HTTP.
+
+## Audit
+
+PostgreSQL stores wallet address, request content, both list prices, both charged amounts, both transaction hashes, lifecycle timestamps, all five free uses, failure credits, their source chains, and their consuming chains. audit_log is append-only.

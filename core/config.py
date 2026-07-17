@@ -39,7 +39,6 @@ FREE_COMMISSION_USD = float(os.environ.get("FREE_COMMISSION_USD", "0.50"))
 PAYOUTS_AUTO = os.environ.get("PAYOUTS_AUTO", "false").lower() == "true"
 
 # Agent-facing wait budget for a synchronous verify response.
-VERIFY_WAIT_TIMEOUT_S = int(os.environ.get("VERIFY_WAIT_TIMEOUT_S", "110"))
 
 # Long random token for the /admin dashboard. Empty disables the dashboard.
 DASHBOARD_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")
