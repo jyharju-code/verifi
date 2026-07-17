@@ -47,7 +47,7 @@ does not pay the 2.90 USDC result gate.
    response is `402`. A full-free chain passes this gate without payment.
 7. Read the result only from a `completed` response.
 
-Do not impose a 110 second client deadline. Human work can take several
+Do not impose a short fixed client deadline. Human work can take several
 minutes. A chain can be resumed later with the same `verify_id` and expires
 after 60 minutes if no human answers.
 
@@ -182,6 +182,34 @@ same request with `PAYMENT-SIGNATURE`. The successful response contains
 
 The entry payment and unlock payment are distinct authorizations and distinct
 on-chain transactions tied to the same `verify_id`.
+
+## MCP
+
+The MCP endpoint is `https://verifi.cloud/mcp`. It exposes four tools:
+
+| Tool | Purpose |
+| --- | --- |
+| `verify_claim` | Submit a request through gate 1 |
+| `get_verify` | Poll a request without payment |
+| `unlock_verify` | Pass gate 2 and receive the ready answer |
+| `verifi_info` | Read service rules and pricing |
+
+Free and paid chains use these same tools. An x402-aware MCP client handles a
+paid gate as follows:
+
+1. Call `verify_claim` or `unlock_verify` normally.
+2. The tool returns a standard x402 `PaymentRequired` result with
+   `x402Version`, `accepts`, and the MCP tool resource.
+3. The MCP payment client signs the selected requirement with the requester
+   wallet and repeats the same call with `x402/payment` metadata.
+4. Verifi forwards the signed authorization to the corresponding HTTP gate.
+5. A settled call returns the result and `x402/payment-response` metadata.
+
+The private key stays in the agent's wallet. Only the signed, single-use x402
+authorization is sent through MCP. Gate 1 and gate 2 require separate
+signatures and remain tied to the same `verify_id`. Generic MCP clients that
+do not implement x402 metadata can pass the encoded authorization through the
+optional `payment_signature` argument.
 
 ## Callback behavior
 

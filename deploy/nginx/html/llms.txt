@@ -8,7 +8,7 @@ Canonical docs: https://verifi.cloud/docs/
 
 1. POST /verify with JSON {intent, claim, agent_id, callback_url?}. agent_id is required and must be the requester 0x wallet address.
 2. Gate 1 costs 0.10 USDC through x402. The request does not enter the human queue before settlement. Store verify_id from the 202 response.
-3. Poll GET /verify/{verify_id}. While status is processing, honor retry_after_seconds and poll again. Do not assume a 110 second deadline.
+3. Poll GET /verify/{verify_id}. While status is processing, honor retry_after_seconds and poll again. Do not assume a short fixed deadline.
 4. If status is failed, stop. failure.entry_credit_granted reports the 0.10 USDC entry credit.
 5. If status is ready, POST /verify-unlock?id={verify_id}.
 6. Gate 2 is a new 2.90 USDC x402 payment. After settlement the response status is completed and contains the human answer.
@@ -41,7 +41,14 @@ x402 v2, exact scheme, USDC on Base mainnet eip155:8453. Entry and unlock are se
 - callback_url receives verify.ready or verify.failed, never a locked result. Polling remains authoritative.
 - Queue capacity is checked before gate 1 payment. A 429 or 503 admission response is not charged.
 - GET polling never costs money.
-- MCP endpoint: https://verifi.cloud/mcp with verify_claim, get_verify, unlock_verify, and verifi_info. MCP covers full-free chains; paid x402 uses HTTP.
+
+## MCP
+
+Endpoint: https://verifi.cloud/mcp
+
+Tools: verify_claim, get_verify, unlock_verify, verifi_info.
+
+Free and paid chains use the same MCP tools. If a gate is paid, the tool returns a standard x402 PaymentRequired result with x402Version, accepts, and the MCP resource. An x402-aware MCP client signs the selected requirement with the requester wallet and repeats the same tool call using x402/payment metadata. A successful paid call returns x402/payment-response metadata. Generic MCP clients can instead pass an encoded authorization through the optional payment_signature argument. Never send a private key. Gate 1 and gate 2 require separate signatures tied to the same verify_id.
 
 ## Audit
 
