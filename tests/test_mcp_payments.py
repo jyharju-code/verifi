@@ -4,7 +4,13 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core.mcp.server import unlock_verify, verifi_info, verify_claim
+from core.mcp.server import (
+    MCP_CONTRACT_VERSION,
+    mcp,
+    unlock_verify,
+    verifi_info,
+    verify_claim,
+)
 
 
 class FakeResponse:
@@ -52,6 +58,10 @@ def context_with_payment(payment=None):
 
 
 class McpPaymentTests(unittest.IsolatedAsyncioTestCase):
+    def test_runtime_version_matches_the_public_contract(self):
+        self.assertEqual(MCP_CONTRACT_VERSION, "2.0.0")
+        self.assertEqual(mcp._mcp_server.version, MCP_CONTRACT_VERSION)
+
     def test_info_is_actionable_for_an_unconfigured_agent(self):
         info = verifi_info()
         self.assertEqual(info["mcp_endpoint"], "https://verifi.cloud/mcp")
