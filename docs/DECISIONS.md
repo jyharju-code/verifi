@@ -82,8 +82,11 @@ poll `GET /verify/{id}` through `processing`, `ready`, `failed`, and
 `completed`. `retry_after_seconds` controls polling cadence. A callback is an
 optional ready or failed notification, never the only delivery path.
 
-## MCP surface covers full-free chains
+## MCP covers free and paid chains
 
-The MCP server reuses the public Verify API inside the compose network. Its
-submit, poll, and unlock tools cover the five full-free chains. Paid x402 gates
-run over plain HTTP; x402-over-MCP can be added when agents ask for it.
+The MCP server reuses the public Verify API inside the compose network, so its
+submit, poll, and unlock tools follow the same two-gate contract as HTTP. When
+a paid gate is reached, the MCP tool returns the exact x402
+`PAYMENT-REQUIRED` value. The agent signs it with its own wallet and repeats
+the same tool with `payment_signature`. Verifi receives only the signed,
+single-use authorization, never the agent's private key.
