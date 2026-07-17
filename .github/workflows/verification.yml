@@ -1,0 +1,50 @@
+name: Verification
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify the API contract
+        run: node --test instances/verify-api/routes/verify.test.js
+      - name: Compile Python services
+        run: python -m compileall -q core
+      - name: Validate the production Compose model
+        env:
+          POSTGRES_PASSWORD: ci-password
+          LITELLM_MASTER_KEY: ci-key
+        run: >-
+          docker compose -f deploy/docker-compose.yml
+          --env-file .env.example
+          --profile bot --profile edge --profile payments config -q
+      - name: Build the core image
+        run: docker build -f core/Dockerfile .
+      - name: Build the Verify API image
+        run: docker build -f instances/verify-api/Dockerfile instances/verify-api
+
+  production-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the public production contract
+        run: ./scripts/smoke-production.sh https://verifi.cloud
