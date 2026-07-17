@@ -38,8 +38,10 @@ does not pay the 2.90 USDC result gate.
 2. If the server returns `402`, complete the x402 payment and repeat the same
    request. A free entitlement or entry credit passes this gate without a
    payment.
-3. Store the returned `verify_id` immediately.
-4. Poll `GET /verify/{verify_id}`. While status is `processing`, wait at least
+3. Store the returned `verify_id` immediately. Prefer an HTTPS `callback_url`
+   so the agent can yield until Verifi reports `ready` or `failed`.
+4. If no callback is available, or callback delivery fails, poll
+   `GET /verify/{verify_id}`. While status is `processing`, wait at least
    `retry_after_seconds` and poll again.
 5. If status becomes `failed`, stop. Check `failure.entry_credit_granted`.
 6. If status becomes `ready`, call
@@ -61,6 +63,10 @@ JSON body:
 | `claim` | string, max 4000 | yes | What the human should verify or answer |
 | `agent_id` | `0x` wallet address | yes | Requester wallet and quota identity |
 | `callback_url` | HTTPS URL | no | Optional ready or failed notification |
+
+For unattended agents, `callback_url` is the recommended completion signal.
+It removes the need for an active polling loop. Persist `verify_id` before
+yielding so polling remains available as a recovery path.
 
 An admitted request returns HTTP `202`:
 
@@ -93,12 +99,13 @@ Possible `entry_source` values are:
 
 ## GET /verify/{verify_id}
 
-This endpoint never costs money. Poll it until the status is `ready`, `failed`,
-or `completed`.
+This endpoint never costs money. Use it when no callback is available, or as
+the recovery path if callback delivery fails. Continue until the status is
+`ready`, `failed`, or `completed`.
 
 | Status | Meaning | Required next action |
 | --- | --- | --- |
-| `processing` | Admission is settling or a human is working | Wait and poll |
+| `processing` | Admission is settling or a human is working | Wait for callback, or poll to recover |
 | `ready` | Human result exists but is locked | Call the unlock endpoint |
 | `failed` | No redeemable result will be produced | Stop |
 | `completed` | Gate 2 passed and result is visible | Use the result |
@@ -124,7 +131,7 @@ A ready response contains no verdict or answer:
 
 ## POST /verify-unlock?id={verify_id}
 
-Call only when polling reports `ready`.
+Call only when the callback or polling reports `ready`.
 
 For a paid chain or an entry-credit chain, the endpoint returns HTTP `402`
 with a new 2.90 USDC x402 requirement. Sign it and repeat the unlock request.
@@ -183,13 +190,54 @@ same request with `PAYMENT-SIGNATURE`. The successful response contains
 The entry payment and unlock payment are distinct authorizations and distinct
 on-chain transactions tied to the same `verify_id`.
 
+### Automatic HTTP payment with `@x402/fetch`
+
+Install `@x402/core`, `@x402/fetch`, `@x402/evm`, and `viem`. The wrapper reads
+the `402` requirement, creates the EIP-3009 authorization with the requester
+wallet, and retries the same HTTP request automatically:
+
+```sh
+npm install @x402/core @x402/fetch @x402/evm viem
+```
+
+```ts
+import { wrapFetchWithPayment } from "@x402/fetch";
+import { x402Client } from "@x402/core/client";
+import { ExactEvmScheme } from "@x402/evm/exact/client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const signer = privateKeyToAccount(
+  process.env.EVM_PRIVATE_KEY as `0x${string}`
+);
+const client = new x402Client();
+client.register("eip155:*", new ExactEvmScheme(signer));
+const paidFetch = wrapFetchWithPayment(fetch, client);
+
+const response = await paidFetch("https://verifi.cloud/verify", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    intent: "Review this customer update",
+    claim: "Check the promise and write a safer version.",
+    agent_id: signer.address,
+    callback_url: "https://your-agent.example/verifi-events",
+  }),
+});
+
+const verify = await response.json();
+```
+
+Use the same `paidFetch` for `POST /verify-unlock?id={verify_id}` after the
+callback reports `ready`. See the official x402 buyer quickstart:
+https://docs.x402.org/getting-started/quickstart-for-buyers
+
 ## MCP
 
 The MCP endpoint is `https://verifi.cloud/mcp`. It exposes four tools:
 
 | Tool | Purpose |
 | --- | --- |
-| `verify_claim` | Submit a request through gate 1 |
+| `verify_claim` | Submit a request, optionally register a callback, and pass gate 1 |
 | `get_verify` | Poll a request without payment |
 | `unlock_verify` | Pass gate 2 and receive the ready answer |
 | `verifi_info` | Read service rules and pricing |
@@ -213,10 +261,21 @@ optional `payment_signature` argument.
 
 ## Callback behavior
 
-`callback_url` is optional. Verifi sends `verify.ready` or `verify.failed` with
-the same next-action fields used by polling. A ready callback never contains
-the locked result. Polling remains authoritative even if callback delivery
-fails.
+`callback_url` is optional and accepted by both HTTP `POST /verify` and MCP
+`verify_claim`. Verifi sends `verify.ready` or `verify.failed` with the same
+next-action fields used by polling. A ready callback never contains the locked
+result. A callback replaces active polling during normal operation. Persist
+`verify_id` and use polling only as the recovery path if delivery fails. Verifi
+makes up to three callback delivery attempts. Treat the callback as a wake-up
+signal and let the subsequent unlock action confirm the current state.
+
+## Authentication
+
+Public Verify API and MCP calls require no API key, signup, account, or
+whitelist. The requester supplies a Base-compatible `0x` wallet address as
+`agent_id`. That wallet identifies the five free chains and signs x402
+authorizations after the free entitlement is exhausted. The private key stays
+in the caller's wallet.
 
 ## Errors
 

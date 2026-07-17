@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core.mcp.server import unlock_verify, verify_claim
+from core.mcp.server import unlock_verify, verifi_info, verify_claim
 
 
 class FakeResponse:
@@ -52,6 +52,16 @@ def context_with_payment(payment=None):
 
 
 class McpPaymentTests(unittest.IsolatedAsyncioTestCase):
+    def test_info_is_actionable_for_an_unconfigured_agent(self):
+        info = verifi_info()
+        self.assertEqual(info["mcp_endpoint"], "https://verifi.cloud/mcp")
+        self.assertFalse(info["authentication"]["api_key_required"])
+        self.assertFalse(info["authentication"]["signup_required"])
+        self.assertTrue(info["authentication"]["wallet_required"])
+        self.assertEqual(info["callback"]["parameter"], "callback_url")
+        self.assertIn("verify.ready", info["callback"]["events"])
+        self.assertIn("quickstart-for-buyers", info["x402_http_guide"])
+
     async def test_entry_returns_standard_x402_requirement_inside_mcp(self):
         calls = []
         requirement = encoded_requirement("100000")
@@ -111,6 +121,27 @@ class McpPaymentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             calls[0][1]["headers"],
             {"PAYMENT-SIGNATURE": expected_signature},
+        )
+
+    async def test_entry_forwards_callback_url_to_verify_api(self):
+        calls = []
+        response = FakeResponse(202, {"verify_id": "a1b2", "status": "processing"})
+        with patch(
+            "core.mcp.server.httpx.AsyncClient",
+            return_value=FakeClient(response, calls),
+        ):
+            result = await verify_claim(
+                "Review a claim",
+                "The launch date is 22 July",
+                "0x1111111111111111111111111111111111111111",
+                context_with_payment(),
+                callback_url="https://agent.example.com/verifi-events",
+            )
+
+        self.assertFalse(result.isError)
+        self.assertEqual(
+            calls[0][1]["json"]["callback_url"],
+            "https://agent.example.com/verifi-events",
         )
 
     async def test_unlock_uses_same_mcp_payment_flow_for_second_gate(self):

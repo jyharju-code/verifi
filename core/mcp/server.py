@@ -32,11 +32,14 @@ mcp = FastMCP(
     instructions=(
         "Verifi sends your claim to a real human who answers accept, reject, "
         "or a refined free-text correction. Every chain has two gates. Use "
-        "verify_claim, poll get_verify until ready or failed, then use "
-        "unlock_verify when ready. The first 5 complete chains per wallet are "
+        "verify_claim with callback_url, then use unlock_verify when the "
+        "callback reports ready. If no callback is available, poll get_verify. "
+        "The first 5 complete chains per wallet are "
         "free at both gates. After that, x402-aware MCP clients can sign and "
         "repeat paid tool calls automatically. Generic clients can pass the "
-        "signed authorization as payment_signature. Never send a private key. "
+        "signed authorization as payment_signature. Pass callback_url to "
+        "receive ready or failed events without an active polling loop. No "
+        "account or API key is required. Never send a private key. "
         "A human reads every request: do not spam."
     ),
 )
@@ -119,6 +122,7 @@ async def verify_claim(
     claim: str,
     agent_id: str,
     ctx: Context,
+    callback_url: str | None = None,
     payment_signature: str | None = None,
 ) -> CallToolResult:
     """Ask a real human to verify a claim.
@@ -126,18 +130,25 @@ async def verify_claim(
     intent: what your agent is trying to do (max 2000 chars).
     claim: the claim a human should verify (max 4000 chars).
     agent_id: your wallet address (0x + 40 hex). Grants 5 free verifies.
+    callback_url: optional HTTPS endpoint for verify.ready or verify.failed.
+    Use it to avoid an active polling loop; retain verify_id for recovery.
     payment_signature: optional manual compatibility input. Standard x402-aware
     MCP clients send the signed payment through request metadata automatically.
-    Returns status "processing" with a verify_id. Poll get_verify at the
-    returned interval until status is "ready" or "failed". If ready, call
-    unlock_verify. Only one active verify per agent_id at a time.
+    Returns status "processing" with a verify_id. Prefer callback_url, or poll
+    get_verify at the returned interval until status is "ready" or "failed".
+    If ready, call unlock_verify. Only one active verify per agent_id at a time.
     """
     signature = payment_signature or _encode_payment_signature(_payment_from_context(ctx))
     headers = {"PAYMENT-SIGNATURE": signature} if signature else {}
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             f"{VERIFY_API}/verify",
-            json={"intent": intent, "claim": claim, "agent_id": agent_id},
+            json={
+                "intent": intent,
+                "claim": claim,
+                "agent_id": agent_id,
+                **({"callback_url": callback_url} if callback_url else {}),
+            },
             headers=headers,
         )
     return _payment_result(resp, tool="verify_claim", price="0.10 USDC")
@@ -182,6 +193,13 @@ def verifi_info() -> dict:
         "service": "Verifi: verified human loops for AI agents",
         "url": "https://verifi.cloud",
         "docs": "https://verifi.cloud/docs/",
+        "mcp_endpoint": "https://verifi.cloud/mcp",
+        "authentication": {
+            "api_key_required": False,
+            "signup_required": False,
+            "wallet_required": True,
+            "summary": "No API key, signup, or account. Use the requester wallet address.",
+        },
         "pricing": {
             "free": "5 complete chains per wallet, entry and unlock both free",
             "paid": "0.10 USDC entry, then a separate 2.90 USDC unlock, total 3.00 USDC",
@@ -191,9 +209,18 @@ def verifi_info() -> dict:
             "clients sign and retry automatically; generic clients may use "
             "payment_signature."
         ),
+        "callback": {
+            "parameter": "callback_url",
+            "events": ["verify.ready", "verify.failed"],
+            "guidance": (
+                "Prefer an HTTPS callback for unattended work. Persist verify_id and "
+                "use get_verify only for recovery if callback delivery fails."
+            ),
+        },
+        "x402_http_guide": "https://docs.x402.org/getting-started/quickstart-for-buyers",
         "rules": [
             "One active verify per agent_id at a time",
-            "Poll processing verifies until ready or failed",
+            "Prefer callback_url; use get_verify as the recovery path",
             "Ready results require the separate unlock action",
             "Unanswered verifies expire in 60 minutes",
             "A failed admitted verify grants one 0.10 USDC entry credit",

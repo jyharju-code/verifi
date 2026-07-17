@@ -159,11 +159,11 @@
   <div class="hero">
     <div class="eyebrow">Contract version 2</div>
     <h1>Human judgment your agent can <span>call.</span></h1>
-    <p class="lead">Use Verifi through MCP or HTTP. Send the work, check when the human answer is ready, then unlock the result through a separate second payment.</p>
+    <p class="lead">Use Verifi through MCP or HTTP. Send the work, receive a callback when the human answer is ready, then unlock the result through a separate second payment.</p>
     <div class="flow" aria-label="Verifi two-gate price">
       <div class="flow-step"><b>0.10 USDC</b><span>Gate 1 confirms the request and enters the human queue.</span></div>
       <div class="arrow" aria-hidden="true">&rarr;</div>
-      <div class="flow-step"><b>Human review</b><span>Poll the same verify ID until the answer is ready or failed.</span></div>
+      <div class="flow-step"><b>Human review</b><span>Receive a callback when the answer is ready or failed. Polling remains a recovery fallback.</span></div>
       <div class="arrow" aria-hidden="true">&rarr;</div>
       <div class="flow-step"><b>2.90 USDC</b><span>Gate 2 unlocks the verdict and explanation.</span></div>
     </div>
@@ -176,6 +176,7 @@
       <a href="#loop">Required agent loop</a>
       <a href="#mcp">MCP</a>
       <a href="#submit">Submit</a>
+      <a href="#callback">Callback</a>
       <a href="#poll">Poll</a>
       <a href="#unlock">Unlock</a>
       <a href="#x402">x402 payment</a>
@@ -190,21 +191,23 @@
         <ol>
           <li>Submit <code>intent</code>, <code>claim</code>, and the requester wallet.</li>
           <li>If gate 1 requests payment, sign 0.10 USDC and repeat the same action.</li>
-          <li>Store <code>verify_id</code> and poll while status is <code>processing</code>.</li>
+          <li>Store <code>verify_id</code>. Prefer <code>callback_url</code> for ready or failed events.</li>
+          <li>If no callback is available, or delivery fails, poll while status is <code>processing</code>.</li>
           <li>If status is <code>failed</code>, stop and check the entry credit.</li>
           <li>If status is <code>ready</code>, call the separate unlock action.</li>
           <li>If gate 2 requests payment, sign 2.90 USDC and repeat the unlock.</li>
           <li>Use the answer only when status is <code>completed</code>.</li>
         </ol>
-        <div class="callout"><strong>Human work can take several minutes.</strong> Honor <code>retry_after_seconds</code>, persist the ID, and resume polling later when needed. Unanswered work expires after 60 minutes.</div>
+        <div class="callout"><strong>Human work can take several minutes.</strong> A callback removes the need for an active polling loop. Always persist the ID so the agent can recover with <code>get_verify</code> or <code>GET /verify/{verify_id}</code>. Unanswered work expires after 60 minutes.</div>
       </section>
 
       <section class="feature" id="mcp">
         <div class="eyebrow">Recommended for agents</div>
         <h2>Free and paid use both work through MCP.</h2>
         <p>Connect to <code>https://verifi.cloud/mcp</code>. The same tools handle the first five free reviews and every paid review after them.</p>
+        <div class="callout"><strong>No API key, signup, account, or whitelist.</strong> Pass the requester's Base-compatible wallet address. It identifies the five free chains and signs later x402 payments without exposing its private key.</div>
         <div class="tool-grid">
-          <div class="tool"><code>verify_claim</code><span>Submit the request and pass gate 1.</span></div>
+          <div class="tool"><code>verify_claim</code><span>Submit the request, optionally register a callback, and pass gate 1.</span></div>
           <div class="tool"><code>get_verify</code><span>Poll the request without payment.</span></div>
           <div class="tool"><code>unlock_verify</code><span>Pass gate 2 and receive the answer.</span></div>
           <div class="tool"><code>verifi_info</code><span>Read pricing, rules, and service details.</span></div>
@@ -237,7 +240,8 @@
   -d '{
     "intent": "refund decision",
     "claim": "Read the policy and write which exception applies to order 482.",
-    "agent_id": "0xYourWalletAddress"
+    "agent_id": "0xYourWalletAddress",
+    "callback_url": "https://your-agent.example/verifi-events"
   }'</code></pre>
         <p>An admitted request returns HTTP <code>202</code> with <code>status: processing</code>, a durable <code>verify_id</code>, and <code>retry_after_seconds</code>.</p>
         <table>
@@ -248,13 +252,26 @@
         </table>
       </section>
 
+      <section id="callback">
+        <div class="eyebrow">Recommended for unattended agents</div>
+        <h2>Let Verifi tell your agent when to continue</h2>
+        <p>Pass an HTTPS <code>callback_url</code> with <code>verify_claim</code> or <code>POST /verify</code>. Verifi sends <code>verify.ready</code> when gate 2 can be called, or <code>verify.failed</code> when the chain must stop.</p>
+        <pre><code>{
+  "event": "verify.ready",
+  "verify_id": "a1b2c3d4-0000-4000-8000-000000000000",
+  "status": "ready",
+  "next_action": "unlock"
+}</code></pre>
+        <div class="callout"><strong>No active polling loop is required.</strong> Store <code>verify_id</code> before yielding. Verifi makes up to three delivery attempts. Treat the callback as a wake-up signal, then continue with unlock. If delivery fails, recover with <code>get_verify</code> or <code>GET /verify/{verify_id}</code>. The callback never includes the locked human answer.</div>
+      </section>
+
       <section id="poll">
         <div class="eyebrow">No charge</div>
         <h2>Poll the same request</h2>
-        <p>Use MCP <code>get_verify</code> or HTTP <code>GET /verify/{verify_id}</code>. Polling never costs money.</p>
+        <p>Use MCP <code>get_verify</code> or HTTP <code>GET /verify/{verify_id}</code> when no callback is available or as recovery after a delivery failure. Polling never costs money.</p>
         <table>
           <tr><th>Status</th><th>Meaning</th><th>Next action</th></tr>
-          <tr><td><code>processing</code></td><td>A human is working</td><td>Wait and poll</td></tr>
+          <tr><td><code>processing</code></td><td>A human is working</td><td>Wait for callback, or poll to recover</td></tr>
           <tr><td><code>ready</code></td><td>The answer exists but is locked</td><td>Call unlock</td></tr>
           <tr><td><code>failed</code></td><td>No answer can be unlocked</td><td>Stop</td></tr>
           <tr><td><code>completed</code></td><td>The answer is visible</td><td>Use the result</td></tr>
@@ -297,6 +314,34 @@
         <p>Both paid gates use x402 v2, scheme <code>exact</code>, USDC on Base mainnet <code>eip155:8453</code>. The buyer needs USDC but no ETH.</p>
         <p>HTTP returns a base64 <code>PAYMENT-REQUIRED</code> header and accepts the signed authorization in <code>PAYMENT-SIGNATURE</code>. MCP returns a standard <code>PaymentRequired</code> result and accepts the signed payload through <code>x402/payment</code> metadata. Successful settlement returns <code>PAYMENT-RESPONSE</code> over HTTP or <code>x402/payment-response</code> through MCP.</p>
         <p>The entry and unlock payments are separate EIP-3009 authorizations and separate on-chain settlements connected to the same <code>verify_id</code>.</p>
+        <h3>Automatic HTTP payment with <code>@x402/fetch</code></h3>
+        <p>The x402 client reads the <code>402</code> requirement, creates the EIP-3009 authorization with the requester's wallet, and retries the same request automatically. Install <code>@x402/core</code>, <code>@x402/fetch</code>, <code>@x402/evm</code>, and <code>viem</code>:</p>
+        <pre><code>npm install @x402/core @x402/fetch @x402/evm viem</code></pre>
+        <pre><code>import { wrapFetchWithPayment } from "@x402/fetch";
+import { x402Client } from "@x402/core/client";
+import { ExactEvmScheme } from "@x402/evm/exact/client";
+import { privateKeyToAccount } from "viem/accounts";
+
+const signer = privateKeyToAccount(
+  process.env.EVM_PRIVATE_KEY as `0x${string}`
+);
+const client = new x402Client();
+client.register("eip155:*", new ExactEvmScheme(signer));
+const paidFetch = wrapFetchWithPayment(fetch, client);
+
+const response = await paidFetch("https://verifi.cloud/verify", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    intent: "Review this customer update",
+    claim: "Check the promise and write a safer version.",
+    agent_id: signer.address,
+    callback_url: "https://your-agent.example/verifi-events"
+  })
+});
+
+const verify = await response.json();</code></pre>
+        <p>Use the same <code>paidFetch</code> for <code>POST /verify-unlock?id={verify_id}</code>. It handles the separate 2.90 USDC requirement when the callback reports <code>ready</code>. See the <a href="https://docs.x402.org/getting-started/quickstart-for-buyers">official x402 buyer quickstart</a>.</p>
       </section>
 
       <section id="failure">
@@ -318,7 +363,7 @@
       <section id="audit">
         <div class="eyebrow">Reliability</div>
         <h2>Callbacks, errors, and audit</h2>
-        <p>An optional callback sends <code>verify.ready</code> or <code>verify.failed</code>. It never exposes a locked answer, and polling remains authoritative if delivery fails.</p>
+        <p>An optional callback sends <code>verify.ready</code> or <code>verify.failed</code>. It replaces active polling during normal operation, never exposes a locked answer, and leaves polling available as the recovery path if delivery fails.</p>
         <table>
           <tr><th>HTTP status</th><th>Meaning</th></tr>
           <tr><td><code>400</code></td><td>Invalid input or wallet address</td></tr>
