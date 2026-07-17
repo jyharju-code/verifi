@@ -75,6 +75,16 @@ Optional `callback_url` delivery on resolution or expiry: https only, port
 disabled, three attempts with backoff. Polling always remains available, so
 webhook failure never strands a result.
 
+## Paid verifies settle before the human wait
+
+The x402 Express middleware settles when the route ends its response. Holding
+a paid response open while a human works can therefore charge the buyer after
+the client connection has already closed, leaving the buyer without a
+`verify_id`. Paid `POST /verify` calls always return `202` with a durable id as
+soon as settlement completes. The human result is then retrieved with
+`GET /verify/{id}` or delivered to `callback_url`. Free verifies may still use
+the synchronous wait because no payment can be stranded.
+
 ## MCP surface covers the free tier
 
 The MCP server reuses the public Verify API inside the compose network, so

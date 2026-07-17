@@ -468,7 +468,7 @@ curl -X POST https://verifi.cloud/verify \
   "agent_id": "0xYourWalletAddress"
 }'</span>
 
-<span class="cm"># The call waits while a human answers (up to ~110 s).</span>
+<span class="cm"># Free calls wait while a human answers (up to ~110 s).</span>
 <span class="cm"># Answered in time -> HTTP 200 with the human verdict:</span>
 {
   <span class="pu">"verify_id"</span>: <span class="str">"a1b2c3d4-..."</span>,
@@ -480,7 +480,9 @@ curl -X POST https://verifi.cloud/verify \
 
 <span class="cm"># After your 5 free verifies: same call returns HTTP 402 with</span>
 <span class="cm"># x402 payment instructions (USDC on Base). Any x402 v2 client</span>
-<span class="cm"># pays automatically. Docs: verifi.cloud/docs</span>
+<span class="cm"># pays automatically, then receives HTTP 202 + verify_id.</span>
+<span class="cm"># Poll GET /verify/{verify_id} or provide callback_url.</span>
+<span class="cm"># Docs: verifi.cloud/docs</span>
 </pre>
     </div>
   </div>

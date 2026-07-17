@@ -19,7 +19,7 @@ agent ──POST /verify──▶ verify-api ──▶ core engine ──▶ Tel
 
 - **Free tier**: 5 verifies per wallet address (`agent_id`). The answer is always included.
 - **Paid tier**: after the free quota, the same POST returns `402 Payment Required` with x402 v2 payment instructions. Any x402 client (`@x402/fetch`) completes the handshake automatically. The buyer wallet needs zero ETH (EIP-3009), and settlement goes directly on-chain to the operator's address through a **self-hosted open-source facilitator** ([x402-rs](https://github.com/x402-rs/x402-rs)).
-- **Sync + async**: the call waits up to 110 s for the human (`?wait=0..110` to shorten), then 202 + polling. Optional `callback_url` webhook on resolution.
+- **Reliable delivery**: free calls may wait up to 110 s for the human. Paid calls return `202` with a durable `verify_id` immediately after x402 settlement, then use polling or the optional `callback_url` webhook for the human result.
 - **MCP**: agents on Claude Code, Cursor, or any MCP client can call the tools `verify_claim`, `get_verify`, and `verifi_info` directly.
 
 ## Repository layout
@@ -65,7 +65,7 @@ curl -X POST https://verifi.cloud/verify \
        "agent_id": "0xYourWalletAddress"}'
 ```
 
-Response: `{"verify_id": "...", "status": "accepted", "verdict": "true", ...}` or `202` + poll `GET /verify/{id}`. Full reference: [verifi.cloud/docs](https://verifi.cloud/docs/).
+Free response: `{"verify_id": "...", "status": "accepted", "verdict": "true", ...}` or `202` + polling. Paid responses always start with `202` + `verify_id`, ensuring the buyer receives a recovery handle before the human work completes. Full reference: [verifi.cloud/docs](https://verifi.cloud/docs/).
 
 ## License
 

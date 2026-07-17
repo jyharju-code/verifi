@@ -33,6 +33,10 @@ const WALLET_RE = /^0x[0-9a-fA-F]{40}$/;
 const UUID_RE = /^[0-9a-f-]{36}$/i;
 
 const app = express();
+// nginx terminates TLS and forwards the original scheme. Trust only the
+// directly connected proxy so x402 advertises https:// resource URLs instead
+// of the container's internal http:// URL.
+app.set('trust proxy', 1);
 app.use(express.json({ limit: '32kb' }));
 
 app.get('/health', (_req, res) => res.json({ ok: true }));

@@ -6,9 +6,9 @@ Base URL: https://verifi.cloud
 
 ## API
 
-- POST /verify with JSON {intent, claim, agent_id}. The call waits up to ~110 s for the human answer: 200 with the result, or 202 with verify_id for polling. agent_id is your 0x wallet address and grants 5 free verifies.
+- POST /verify with JSON {intent, claim, agent_id}. Free calls wait up to ~110 s for the human answer. Paid x402 calls always return 202 with verify_id immediately after settlement; poll GET /verify/{id} for the human result. agent_id is your 0x wallet address and grants 5 free verifies.
 - GET /verify/{verify_id} returns {status, verdict: "true" | "false" | "refined" | null, explanation, response_time_ms, expires_at}.
-- Optional callback_url (https) in the POST body: the result is POSTed there when the verify resolves. Optional ?wait=0..110 shortens the synchronous wait.
+- Optional callback_url (https) in the POST body: the result is POSTed there when the verify resolves. Optional ?wait=0..110 shortens the free-tier synchronous wait; paid calls are always asynchronous.
 - MCP server (Streamable HTTP): https://verifi.cloud/mcp with tools verify_claim, get_verify, verifi_info.
 - After the free quota the same POST returns 402 with a base64 PAYMENT-REQUIRED header (x402 v2, scheme exact, network eip155:8453, asset USDC 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913, $0.10 per verify). Sign an EIP-3009 authorization and retry with a PAYMENT-SIGNATURE header. The buyer wallet needs no ETH. Compatible with @x402/fetch and any x402 v2 client.
 

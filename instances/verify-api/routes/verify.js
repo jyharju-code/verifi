@@ -1,9 +1,10 @@
 /**
  * Verify API handlers.
  *
- * The agent-facing call is synchronous up to VERIFY_WAIT_TIMEOUT_S: it holds
- * the request while a human answers. On timeout it returns 202 with the
- * verify id so the agent can poll GET /verify/:id.
+ * Free verifies can wait synchronously up to VERIFY_WAIT_TIMEOUT_S. Paid
+ * verifies always return 202 immediately after x402 settlement so the buyer
+ * receives a durable verify id before any human work begins. The agent then
+ * polls GET /verify/:id or uses callback_url.
  *
  * Visibility: free tier responses are always open. Paid tier responses
  * auto-unlock with the $ per-verify payment; unlock_paid can only be false
@@ -66,6 +67,14 @@ export function publicView(v) {
   return view;
 }
 
+export function effectiveWaitSeconds(tier, requestedWaitS) {
+  // @x402/express settles only when the route ends the response. Waiting for
+  // a human before ending a paid response can strand the buyer if the HTTP
+  // connection closes while settlement still succeeds. Settle first, return
+  // the durable id, then deliver the human result asynchronously.
+  return tier === 'paid' ? 0 : requestedWaitS;
+}
+
 /**
  * After the x402 middleware settles (it finalizes during the response), the
  * PAYMENT-RESPONSE header carries the settlement transaction. Record it on
@@ -125,8 +134,9 @@ export async function handleVerify(req, res) {
       return res.status(400).json({ error: 'callback_url must be an https URL, max 2048 chars' });
     }
   }
-  // Agents in serverless environments can shorten the synchronous window
-  // with ?wait=<seconds> (0..110) and rely on callback_url or polling.
+  // Free-tier agents can shorten the synchronous window with ?wait=<seconds>
+  // (0..110). Paid requests always use zero so x402 settles before the human
+  // wait and the buyer reliably receives a verify id.
   let waitS = WAIT_S;
   if (req.query.wait !== undefined) {
     const parsed = Number(req.query.wait);
@@ -137,6 +147,7 @@ export async function handleVerify(req, res) {
   }
 
   const tier = req.verifyTier === 'free' ? 'free' : 'paid';
+  waitS = effectiveWaitSeconds(tier, waitS);
   const create = await coreFetch('/internal/verifies', {
     method: 'POST',
     body: JSON.stringify({

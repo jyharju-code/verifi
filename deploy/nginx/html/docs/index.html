@@ -58,8 +58,9 @@
 
   <h2>1 · Overview</h2>
   <p>Verifi routes a claim from your agent to a real human, who accepts, rejects, or refines it.
-  The HTTP call holds open while the human answers (up to about 110 seconds), so most verifies
-  complete in a single request and response.</p>
+  Free calls can hold open while the human answers (up to about 110 seconds). Paid calls return
+  a durable verification id immediately after x402 settlement, then complete through polling or
+  an optional webhook.</p>
   <ul>
     <li><strong>Free tier:</strong> 5 verifies per wallet address. Pass your address as <code>agent_id</code>.</li>
     <li><strong>Paid tier:</strong> $0.10 per verify, paid inline with x402. No registration. Response unlocks automatically when the payment settles.</li>
@@ -76,11 +77,11 @@
     <tr><td>agent_id</td><td>string, optional</td><td>Your wallet address (0x...). Required for the free tier.</td></tr>
     <tr><td>callback_url</td><td>https URL, optional</td><td>We POST the result here when the verify resolves (3 attempts). Polling always works too.</td></tr>
   </table>
-  <p>Query parameter <code>?wait=0..110</code> shortens the synchronous wait
-  (default 110 s). Use <code>wait=0</code> with <code>callback_url</code> in
-  serverless environments.</p>
-  <p><strong>Responses:</strong> <code>200</code> human answered within the wait window,
-  <code>202</code> still pending (poll the URL below), <code>402</code> payment required,
+  <p>For free calls, query parameter <code>?wait=0..110</code> shortens the synchronous wait
+  (default 110 s). Paid calls always return immediately after settlement, regardless of this
+  parameter.</p>
+  <p><strong>Responses:</strong> <code>200</code> free call answered within the wait window,
+  <code>202</code> pending or paid call accepted (poll the URL below), <code>402</code> payment required,
   <code>400</code> invalid input.</p>
 
   <h3>GET /verify/{verify_id}</h3>
@@ -119,7 +120,9 @@
   amount and retries the same request with the signed payload base64-encoded in a
   <code>PAYMENT-SIGNATURE</code> request header. The buyer wallet needs <strong>no ETH</strong>:
   the signature is off-chain and Verifi's facilitator pays the gas. On success the response
-  carries a <code>PAYMENT-RESPONSE</code> header with the settlement transaction hash.</p>
+  carries a <code>PAYMENT-RESPONSE</code> header with the settlement transaction hash and a
+  <code>202</code> body with the durable <code>verify_id</code>. Poll that id or provide
+  <code>callback_url</code> to receive the human result.</p>
   <div class="note">Any x402 v2 compatible client handles this handshake automatically.
   The official TypeScript packages are <code>@x402/fetch</code> and <code>@x402/evm</code>.</div>
 
@@ -153,15 +156,23 @@ const resp = await fetchPay('https://verifi.cloud/verify', {
     agent_id: account.address,
   }),
 });
-console.log(resp.status, await resp.json());</code></pre>
+const pending = await resp.json();
+console.log(resp.status, pending.verify_id); // 202 after settlement
+
+let result = pending;
+while (result.status === 'pending') {
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  result = await fetch(`https://verifi.cloud/verify/${pending.verify_id}`).then(r => r.json());
+}
+console.log(result);</code></pre>
 
   <h2>5 · Statuses and errors</h2>
   <table>
     <tr><th>Code / status</th><th>Meaning</th></tr>
     <tr><td>200 accepted</td><td>A human confirmed the claim</td></tr>
     <tr><td>200 rejected</td><td>A human rejected the claim</td></tr>
-    <tr><td>200 refined</td><td>A human answered with free text (in <code>response</code>)</td></tr>
-    <tr><td>202 pending</td><td>No answer yet: poll <code>GET /verify/{id}</code></td></tr>
+    <tr><td>200 refined</td><td>A human answered with free text in <code>explanation</code>; <code>response</code> is retained for compatibility</td></tr>
+    <tr><td>202 pending</td><td>No answer yet, or paid call settled: poll <code>GET /verify/{id}</code></td></tr>
     <tr><td>expired</td><td>No human answered within 60 minutes</td></tr>
     <tr><td>400</td><td>Missing or oversized <code>intent</code> / <code>claim</code></td></tr>
     <tr><td>402</td><td>Free quota used and no valid <code>PAYMENT-SIGNATURE</code></td></tr>
