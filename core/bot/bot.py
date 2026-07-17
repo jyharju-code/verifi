@@ -29,6 +29,10 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
 )
+# httpx logs full request URLs at INFO. Telegram Bot API URLs contain the bot
+# token, so dependency request logs must never inherit the application level.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("verifi.bot")
 
 COMMANDS = [

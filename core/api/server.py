@@ -24,6 +24,10 @@ from core.db.database import close_pool, get_pool
 from core.routing import pool as routing_pool
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+# Outbound notification URLs can contain credentials. Keep application events
+# at INFO, but never log dependency request URLs at that level.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("verifi.core-api")
 
 # Global cap on simultaneously pending verifies: the human queue's overload
