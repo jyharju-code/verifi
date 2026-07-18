@@ -78,6 +78,7 @@ services:
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       FREE_COMMISSION_USD: ${FREE_COMMISSION_USD:-0.50}
       MAX_PENDING_TOTAL: ${MAX_PENDING_TOTAL:-25}
+      FREE_DAILY_MAX: ${FREE_DAILY_MAX:-0}
       CORE_INTERNAL_SECRET: ${CORE_INTERNAL_SECRET:-}
     command: ["sh", "-c", "python -m core.db.migrate && exec uvicorn core.api.server:app --host 0.0.0.0 --port 8700 --no-access-log"]
 

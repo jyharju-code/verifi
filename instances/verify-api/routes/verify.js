@@ -147,9 +147,21 @@ export function recordSettlementOnFinish(res, kind, getVerifyId) {
     if (retriesLeft > 0) {
       setTimeout(() => attempt(retriesLeft - 1, Math.min(delayMs * 2, 60_000)), delayMs);
     } else if (!recorded) {
+      const verifyId = getVerifyId();
       console.error(
-        `SETTLEMENT NOT CAPTURED for verify ${getVerifyId()}: check facilitator logs and reconcile`,
+        `SETTLEMENT NOT CAPTURED for verify ${verifyId}: check facilitator logs and reconcile`,
       );
+      // Make the failure durable and dashboard-visible instead of leaving it
+      // only in stderr. Best effort: if core is unreachable this also fails.
+      const header = res.getHeader('PAYMENT-RESPONSE') ?? res.getHeader('payment-response');
+      let transaction = null;
+      try {
+        if (header) transaction = JSON.parse(Buffer.from(String(header), 'base64').toString('utf8')).transaction ?? null;
+      } catch { /* header unparseable: still alert without a tx */ }
+      coreFetch('/internal/settlement-alerts', {
+        method: 'POST',
+        body: JSON.stringify({ verify_id: String(verifyId ?? ''), kind, transaction, detail: 'capture retries exhausted' }),
+      }).catch((err) => console.error('settlement alert failed:', err.message));
     }
   };
   const start = () => attempt(7, 2_000);

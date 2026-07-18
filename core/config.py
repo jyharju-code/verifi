@@ -35,6 +35,13 @@ CORE_API_PORT = int(os.environ.get("CORE_API_PORT", "8700"))
 # Flat commission for free tier verifies (paid verifies use instances.associate_commission).
 FREE_COMMISSION_USD = float(os.environ.get("FREE_COMMISSION_USD", "0.50"))
 
+# Platform-wide cap on free (initial_free) admissions granted per calendar day
+# (UTC). It bounds the daily cost of the free tier no matter how many wallets a
+# caller invents. 0 disables the cap. When the day's budget is spent, wallets
+# with free allowance left fall through to the paid x402 flow, so a caller can
+# always still proceed by paying. Earned failure credits are never capped.
+FREE_DAILY_MAX = int(os.environ.get("FREE_DAILY_MAX", "0"))
+
 # Phase 2 switch: when true, payout.py actually runs awal. Until then it only prints.
 PAYOUTS_AUTO = os.environ.get("PAYOUTS_AUTO", "false").lower() == "true"
 

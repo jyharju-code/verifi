@@ -216,6 +216,78 @@ async def _expire_stale_loop() -> None:
             log.exception("expire loop failed")
 
 
+# A settled transaction is retried this many times before it is flagged for
+# manual reconciliation. Most retries resolve a transient failure or a verify
+# that was not yet in an applicable state.
+SETTLEMENT_MAX_ATTEMPTS = 8
+
+
+async def _reconcile_settlements_once() -> int:
+    """Finish applying journaled settlements that were reported but not applied."""
+    db = await get_pool()
+    pending = await db.fetch(
+        """
+        SELECT id, verify_id, kind, transaction, payer, attempts
+        FROM settlement_journal
+        WHERE applied = false AND attempts < $1
+        ORDER BY created_at
+        LIMIT 20
+        """,
+        SETTLEMENT_MAX_ATTEMPTS,
+    )
+    done = 0
+    for j in pending:
+        try:
+            async with db.acquire() as conn:
+                async with conn.transaction():
+                    await _apply_settlement(
+                        conn, j["verify_id"], j["kind"], j["transaction"], j["payer"]
+                    )
+                    await conn.execute(
+                        "UPDATE settlement_journal SET applied = true, applied_at = now() WHERE id = $1",
+                        j["id"],
+                    )
+            done += 1
+            await audit(
+                "core-api",
+                "settlement_reconciled",
+                {"verify_id": str(j["verify_id"]), "kind": j["kind"], "transaction": j["transaction"]},
+            )
+        except Exception as exc:
+            attempts = j["attempts"] + 1
+            await db.execute(
+                "UPDATE settlement_journal SET attempts = $2, last_error = $3 WHERE id = $1",
+                j["id"],
+                attempts,
+                str(exc)[:200],
+            )
+            if attempts >= SETTLEMENT_MAX_ATTEMPTS:
+                log.error(
+                    "settlement unresolved verify=%s kind=%s tx=%s: %s",
+                    j["verify_id"], j["kind"], j["transaction"], exc,
+                )
+                await audit(
+                    "core-api",
+                    "settlement_unresolved",
+                    {
+                        "verify_id": str(j["verify_id"]),
+                        "kind": j["kind"],
+                        "transaction": j["transaction"],
+                        "error": str(exc)[:200],
+                    },
+                )
+    return done
+
+
+async def _reconcile_settlements_loop() -> None:
+    while True:
+        await asyncio.sleep(30)
+        try:
+            await _reconcile_settlements_once()
+        except Exception:
+            log.exception("settlement reconcile loop failed")
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     from core.webhooks import delivery_loop
@@ -223,9 +295,11 @@ async def lifespan(app: FastAPI):
     await get_pool()
     task = asyncio.create_task(_expire_stale_loop())
     webhook_task = asyncio.create_task(delivery_loop())
+    reconcile_task = asyncio.create_task(_reconcile_settlements_loop())
     yield
     task.cancel()
     webhook_task.cancel()
+    reconcile_task.cancel()
     await close_pool()
 
 
@@ -385,7 +459,20 @@ async def create_verify(body: VerifyIn) -> dict:
                     body.instance,
                     body.agent_id,
                 )
-                if free_used < allowance:
+                # Platform-wide daily free budget. When spent, this wallet's
+                # remaining free allowance waits: the request falls through to
+                # the paid path instead of consuming a free slot.
+                budget_open = config.FREE_DAILY_MAX <= 0 or (
+                    await conn.fetchval(
+                        """
+                        SELECT count(*) FROM wallet_entitlements
+                        WHERE kind = 'initial_free'
+                          AND consumed_at >=
+                              date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                        """
+                    )
+                ) < config.FREE_DAILY_MAX
+                if free_used < allowance and budget_open:
                     # Prefer reclaiming a released free slot over minting a new
                     # one. This keeps the number of free rows at or below the
                     # allowance and reuses the original free_use_number.
@@ -539,63 +626,98 @@ class PaymentIn(BaseModel):
     payer: str | None = Field(default=None, max_length=80)
 
 
+async def _apply_settlement(conn, verify_id, kind: str, transaction: str, payer):
+    """Advance exactly one paid gate for a settled transaction. Idempotent.
+
+    Re-applying the same (verify, kind, transaction) is a no-op that returns
+    the current row, so record_payment and the reconciliation loop can both
+    call this safely.
+    """
+    current = await conn.fetchrow("SELECT * FROM verifies WHERE id = $1 FOR UPDATE", verify_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="verify not found")
+    assigned = False
+    if kind == "entry":
+        if current["x402_payment_tx"]:
+            if current["x402_payment_tx"] != transaction:
+                raise HTTPException(status_code=409, detail="entry is already settled")
+            row = current
+        else:
+            if current["status"] != "admission_pending" or current["entry_source"] != "x402":
+                raise HTTPException(status_code=409, detail="verify is not awaiting x402 admission")
+            row = await conn.fetchrow(
+                """
+                UPDATE verifies
+                SET x402_payment_tx = $2, entry_payer = COALESCE($3, agent_id),
+                    entry_charged_usdc = 0.10, admitted_at = now(), status = 'pending'
+                WHERE id = $1 RETURNING *
+                """,
+                verify_id,
+                transaction,
+                payer,
+            )
+            assigned = await _route_admitted_verify(conn, row)
+    else:
+        if current["x402_unlock_tx"]:
+            if current["x402_unlock_tx"] != transaction:
+                raise HTTPException(status_code=409, detail="result is already unlocked")
+            row = current
+        else:
+            if current["status"] not in ("accepted", "rejected", "refined"):
+                raise HTTPException(status_code=409, detail="result is not ready")
+            if current["result_unlocked"]:
+                raise HTTPException(status_code=409, detail="result is already unlocked")
+            if current["entry_source"] == "initial_free":
+                raise HTTPException(status_code=409, detail="free chain must use entitlement unlock")
+            row = await conn.fetchrow(
+                """
+                UPDATE verifies
+                SET x402_unlock_tx = $2, unlock_source = 'x402',
+                    unlock_payer = COALESCE($3, agent_id),
+                    unlock_charged_usdc = 2.90,
+                    result_unlocked = true, unlocked_at = now()
+                WHERE id = $1 RETURNING *
+                """,
+                verify_id,
+                transaction,
+                payer,
+            )
+    return row, assigned
+
+
 @app.post("/internal/verifies/{verify_id}/payment")
 async def record_payment(verify_id: UUID, body: PaymentIn) -> dict:
-    """Attach a settled x402 transaction and advance exactly one paid gate."""
+    """Attach a settled x402 transaction and advance exactly one paid gate.
+
+    The report is journaled durably before it is applied. If the process dies
+    between the two, or the verify is not yet applicable, the reconciliation
+    loop finishes the job from the journal, so a settled payment is never lost.
+    """
     db = await get_pool()
-    assigned = False
+    await db.execute(
+        """
+        INSERT INTO settlement_journal (verify_id, kind, transaction, payer)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (transaction, kind) DO NOTHING
+        """,
+        verify_id,
+        body.kind,
+        body.transaction,
+        body.payer,
+    )
     async with db.acquire() as conn:
         async with conn.transaction():
-            current = await conn.fetchrow(
-                "SELECT * FROM verifies WHERE id = $1 FOR UPDATE", verify_id
+            row, assigned = await _apply_settlement(
+                conn, verify_id, body.kind, body.transaction, body.payer
             )
-            if current is None:
-                raise HTTPException(status_code=404, detail="verify not found")
-            if body.kind == "entry":
-                if current["x402_payment_tx"]:
-                    if current["x402_payment_tx"] != body.transaction:
-                        raise HTTPException(status_code=409, detail="entry is already settled")
-                    row = current
-                else:
-                    if current["status"] != "admission_pending" or current["entry_source"] != "x402":
-                        raise HTTPException(status_code=409, detail="verify is not awaiting x402 admission")
-                    row = await conn.fetchrow(
-                        """
-                        UPDATE verifies
-                        SET x402_payment_tx = $2, entry_payer = COALESCE($3, agent_id),
-                            entry_charged_usdc = 0.10, admitted_at = now(), status = 'pending'
-                        WHERE id = $1 RETURNING *
-                        """,
-                        verify_id,
-                        body.transaction,
-                        body.payer,
-                    )
-                    assigned = await _route_admitted_verify(conn, row)
-            else:
-                if current["x402_unlock_tx"]:
-                    if current["x402_unlock_tx"] != body.transaction:
-                        raise HTTPException(status_code=409, detail="result is already unlocked")
-                    row = current
-                else:
-                    if current["status"] not in ("accepted", "rejected", "refined"):
-                        raise HTTPException(status_code=409, detail="result is not ready")
-                    if current["result_unlocked"]:
-                        raise HTTPException(status_code=409, detail="result is already unlocked")
-                    if current["entry_source"] == "initial_free":
-                        raise HTTPException(status_code=409, detail="free chain must use entitlement unlock")
-                    row = await conn.fetchrow(
-                        """
-                        UPDATE verifies
-                        SET x402_unlock_tx = $2, unlock_source = 'x402',
-                            unlock_payer = COALESCE($3, agent_id),
-                            unlock_charged_usdc = 2.90,
-                            result_unlocked = true, unlocked_at = now()
-                        WHERE id = $1 RETURNING *
-                        """,
-                        verify_id,
-                        body.transaction,
-                        body.payer,
-                    )
+            await conn.execute(
+                """
+                UPDATE settlement_journal SET applied = true, applied_at = now()
+                WHERE transaction = $1 AND kind = $2
+                """,
+                body.transaction,
+                body.kind,
+            )
     await audit(
         "core-api",
         "payment_recorded",
@@ -611,6 +733,37 @@ async def record_payment(verify_id: UUID, body: PaymentIn) -> dict:
         },
     )
     return {"ok": True, "verify_no": row["verify_no"], "assigned": assigned}
+
+
+class SettlementAlertIn(BaseModel):
+    verify_id: str = Field(max_length=64)
+    kind: str = Field(pattern="^(entry|unlock)$")
+    transaction: str | None = Field(default=None, max_length=80)
+    detail: str | None = Field(default=None, max_length=300)
+
+
+@app.post("/internal/settlement-alerts")
+async def settlement_alert(body: SettlementAlertIn) -> dict:
+    """Record a settlement an instance settled on-chain but could not persist.
+
+    Makes the failure durable and dashboard-visible for reconciliation, rather
+    than leaving it only in the instance's stderr.
+    """
+    log.error(
+        "settlement capture unresolved verify=%s kind=%s tx=%s",
+        body.verify_id, body.kind, body.transaction,
+    )
+    await audit(
+        "core-api",
+        "settlement_capture_unresolved",
+        {
+            "verify_id": body.verify_id,
+            "kind": body.kind,
+            "transaction": body.transaction,
+            "detail": body.detail,
+        },
+    )
+    return {"ok": True}
 
 
 class EntitlementUnlockIn(BaseModel):
@@ -734,6 +887,8 @@ async def quota(instance: str, agent_id: str | None = None) -> dict:
             "entry_credits_remaining": 0,
             "entry_credits_granted": 0,
             "has_entry_entitlement": False,
+            "free_capacity_open": False,
+            "entitlement_admission_available": False,
             "pending_count": 0,
         }
     row2 = await db.fetchrow(
@@ -763,7 +918,25 @@ async def quota(instance: str, agent_id: str | None = None) -> dict:
     pending_total = await db.fetchval(
         "SELECT count(*) FROM verifies WHERE status IN ('admission_pending', 'pending')"
     )
+    free_capacity_open = True
+    if config.FREE_DAILY_MAX > 0:
+        free_today = await db.fetchval(
+            """
+            SELECT count(*) FROM wallet_entitlements
+            WHERE kind = 'initial_free'
+              AND consumed_at >=
+                  date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+            """
+        )
+        free_capacity_open = free_today < config.FREE_DAILY_MAX
     full_free_remaining = max(0, allowance - row2["free_used"])
+    # A free chain is only admissible when the wallet has allowance left AND the
+    # platform's daily free budget is still open. Earned credits are never
+    # gated by the budget.
+    entitlement_admission_available = (
+        row2["entry_credits_remaining"] > 0
+        or (full_free_remaining > 0 and free_capacity_open)
+    )
     return {
         "instance": instance,
         "agent_id": agent_id,
@@ -774,6 +947,8 @@ async def quota(instance: str, agent_id: str | None = None) -> dict:
         "entry_credits_remaining": row2["entry_credits_remaining"],
         "entry_credits_granted": row2["entry_credits_granted"],
         "has_entry_entitlement": full_free_remaining > 0 or row2["entry_credits_remaining"] > 0,
+        "free_capacity_open": free_capacity_open,
+        "entitlement_admission_available": entitlement_admission_available,
         "pending_count": pending_count,
         "pending_total": pending_total,
         "queue_full": pending_total >= MAX_PENDING_TOTAL,
