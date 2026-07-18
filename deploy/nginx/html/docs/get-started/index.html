@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Give your agent buying power | Verifi</title>
+  <meta name="description" content="Give your AI agent a secure x402 wallet, connect Verifi, and start buying compatible tools in minutes.">
+  <meta name="theme-color" content="#080908">
+  <link rel="canonical" href="https://verifi.cloud/docs/get-started/">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23d9ff57'/%3E%3Ccircle cx='32' cy='32' r='10' fill='%23080908'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080908;
+      --panel: #101210;
+      --panel-2: #151715;
+      --line: rgba(255, 255, 255, 0.11);
+      --line-soft: rgba(255, 255, 255, 0.065);
+      --text: #f5f6f1;
+      --muted: #a4a89e;
+      --dim: #72766e;
+      --lime: #d9ff57;
+      --lime-soft: rgba(217, 255, 87, 0.1);
+      --black: #080908;
+      --radius: 18px;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.65 var(--sans);
+      -webkit-font-smoothing: antialiased;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      opacity: 0.26;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: linear-gradient(to bottom, black, transparent 75%);
+    }
+    a { color: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    :focus-visible { outline: 2px solid var(--lime); outline-offset: 4px; }
+    .container { width: min(1120px, calc(100% - 40px)); margin: 0 auto; }
+    .skip-link { position: fixed; left: 16px; top: -70px; z-index: 50; padding: 10px 14px; border-radius: 9px; background: var(--lime); color: var(--black); font-weight: 800; }
+    .skip-link:focus { top: 16px; }
+    header { position: sticky; top: 0; z-index: 20; border-bottom: 1px solid var(--line-soft); background: rgba(8,9,8,0.86); backdrop-filter: blur(18px); }
+    .nav { min-height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .brand { display: flex; align-items: center; gap: 11px; text-decoration: none; font-weight: 850; letter-spacing: -0.02em; }
+    .brand-mark { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: var(--lime); }
+    .brand-mark::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--black); }
+    .brand small { color: var(--dim); font: 700 9px/1 var(--mono); text-transform: uppercase; letter-spacing: 0.09em; }
+    .nav-links { display: flex; align-items: center; gap: 10px; }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42px;
+      padding: 0 17px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: transparent;
+      color: var(--muted);
+      font: 800 11px/1 var(--mono);
+      text-decoration: none;
+      cursor: pointer;
+      transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+    }
+    .button:hover { transform: translateY(-2px); border-color: rgba(255,255,255,0.28); background: rgba(255,255,255,0.04); color: var(--text); }
+    .button.primary { border-color: var(--lime); background: var(--lime); color: var(--black); }
+    .button.primary:hover { background: #e3ff79; }
+    .eyebrow { display: inline-flex; align-items: center; gap: 9px; color: var(--lime); font: 800 11px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; }
+    .eyebrow::before { content: ""; width: 26px; height: 1px; background: var(--lime); }
+    .hero { position: relative; overflow: hidden; padding: 94px 0 80px; border-bottom: 1px solid var(--line-soft); }
+    .hero::after { content: ""; position: absolute; width: 560px; height: 560px; right: -230px; top: -270px; border-radius: 50%; background: var(--lime); filter: blur(155px); opacity: 0.12; pointer-events: none; }
+    .hero-grid { position: relative; z-index: 1; display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 72px; align-items: center; }
+    h1 { margin: 24px 0 22px; max-width: 760px; font-size: clamp(50px, 7vw, 86px); line-height: 0.94; letter-spacing: -0.06em; }
+    h1 span { color: var(--lime); }
+    .lead { max-width: 680px; margin: 0; color: var(--muted); font-size: 19px; line-height: 1.65; }
+    .hero-note { margin: 28px 0 0; color: var(--dim); font: 700 11px/1.5 var(--mono); }
+    .prompt-card { border: 1px solid rgba(217,255,87,0.32); border-radius: 22px; overflow: hidden; background: #0b0d0b; box-shadow: 0 32px 90px rgba(0,0,0,0.42); }
+    .prompt-bar { min-height: 48px; padding: 0 15px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
+    .prompt-label { color: var(--dim); font: 700 10px/1 var(--mono); }
+    .copy-button { border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); padding: 8px 12px; font: 800 10px/1 var(--mono); cursor: pointer; }
+    .copy-button:hover { border-color: rgba(217,255,87,0.55); color: var(--text); }
+    pre { margin: 0; padding: 25px; overflow-x: auto; white-space: pre-wrap; color: #e0e5dc; font: 500 13px/1.75 var(--mono); }
+    .prompt-foot { padding: 15px 20px; border-top: 1px solid var(--line); background: var(--lime-soft); color: var(--muted); font-size: 13px; }
+    .prompt-foot strong { color: var(--text); }
+    section { padding: 96px 0; border-bottom: 1px solid var(--line-soft); }
+    .section-head { display: flex; align-items: end; justify-content: space-between; gap: 36px; margin-bottom: 42px; }
+    .section-head h2 { margin: 16px 0 0; max-width: 760px; font-size: clamp(38px, 5.5vw, 62px); line-height: 0.98; letter-spacing: -0.05em; }
+    .section-head p { max-width: 430px; margin: 0; color: var(--muted); }
+    .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .step { min-height: 300px; padding: 27px; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+    .step.featured { border-color: rgba(217,255,87,0.36); background: linear-gradient(145deg, var(--lime-soft), var(--panel) 58%); }
+    .step-number { color: var(--lime); font: 850 11px/1 var(--mono); letter-spacing: 0.1em; }
+    .step h3 { margin: 46px 0 12px; font-size: 24px; line-height: 1.05; letter-spacing: -0.035em; }
+    .step p { margin: 0; color: var(--muted); }
+    .step-bottom { margin-top: auto; padding-top: 28px; }
+    .network { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: rgba(0,0,0,0.2); font: 750 11px/1.4 var(--mono); }
+    .network span { color: var(--dim); }
+    .network strong { color: var(--lime); }
+    .try-prompt { padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: #0b0d0b; color: #dce1d8; font: 500 11px/1.6 var(--mono); }
+    .universal { background: #0c0e0c; }
+    .universal-grid { display: grid; grid-template-columns: 0.88fr 1.12fr; gap: 16px; }
+    .universal-copy, .tool-cloud { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+    .universal-copy { padding: 34px; }
+    .universal-copy h2 { margin: 18px 0; font-size: clamp(40px, 5vw, 60px); line-height: 0.98; letter-spacing: -0.05em; }
+    .universal-copy p { color: var(--muted); }
+    .tool-cloud { padding: 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .tool { min-height: 116px; padding: 18px; border: 1px solid var(--line-soft); border-radius: 14px; background: var(--panel-2); }
+    .tool b { display: block; margin-bottom: 6px; }
+    .tool span { color: var(--muted); font-size: 13px; }
+    .price-strip { margin-top: 16px; display: grid; grid-template-columns: 1fr auto 1fr; gap: 14px; align-items: center; padding: 22px; border: 1px solid rgba(217,255,87,0.32); border-radius: var(--radius); background: var(--lime-soft); }
+    .price-strip strong { display: block; font-size: 19px; }
+    .price-strip span { color: var(--muted); font-size: 14px; }
+    .price-arrow { color: var(--lime); font: 850 18px/1 var(--mono); }
+    .closing { padding: 100px 0; text-align: center; }
+    .closing h2 { margin: 0 auto; max-width: 900px; font-size: clamp(42px, 6.5vw, 76px); line-height: 0.96; letter-spacing: -0.055em; }
+    .closing h2 span { color: var(--lime); }
+    .closing p { max-width: 680px; margin: 24px auto 0; color: var(--muted); font-size: 18px; }
+    .closing-actions { margin-top: 32px; display: flex; justify-content: center; flex-wrap: wrap; gap: 12px; }
+    footer { border-top: 1px solid var(--line-soft); }
+    .footer-inner { min-height: 82px; display: flex; align-items: center; justify-content: space-between; gap: 20px; color: var(--dim); font: 12px/1.5 var(--mono); }
+    .footer-links { display: flex; gap: 18px; }
+    .footer-links a { text-decoration: none; }
+    .footer-links a:hover { color: var(--text); }
+    @media (max-width: 880px) {
+      .hero-grid, .universal-grid { grid-template-columns: 1fr; }
+      .hero-grid { gap: 48px; }
+      .steps { grid-template-columns: 1fr; }
+      .step { min-height: 0; }
+      .step h3 { margin-top: 32px; }
+      .section-head { align-items: start; flex-direction: column; }
+    }
+    @media (max-width: 620px) {
+      .container { width: min(100% - 28px, 1120px); }
+      .nav { min-height: 62px; }
+      .brand small, .nav-links .button:not(.primary) { display: none; }
+      .hero { padding: 60px 0 62px; }
+      h1 { font-size: clamp(46px, 15vw, 64px); }
+      .lead { font-size: 17px; }
+      pre { padding: 20px; font-size: 11px; }
+      section { padding: 72px 0; }
+      .section-head { margin-bottom: 30px; }
+      .section-head h2 { font-size: 41px; }
+      .tool-cloud { grid-template-columns: 1fr; }
+      .price-strip { grid-template-columns: 1fr; }
+      .price-arrow { transform: rotate(90deg); text-align: center; }
+      .footer-inner { align-items: start; flex-direction: column; justify-content: center; padding: 24px 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header>
+  <div class="container nav">
+    <a class="brand" href="/" aria-label="Verifi home">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>verifi.cloud</span>
+      <small>Get started</small>
+    </a>
+    <div class="nav-links">
+      <a class="button" href="/docs/">API docs</a>
+      <a class="button primary" href="#setup">Set up Verifi</a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero">
+    <div class="container hero-grid">
+      <div>
+        <div class="eyebrow">One prompt, one wallet</div>
+        <h1>Give your agent <span>buying power.</span></h1>
+        <p class="lead">Set up one secure x402 wallet and your agent can pay for Verifi and other compatible online tools automatically. No checkout pages. No card details. No separate payment setup for every service.</p>
+        <p class="hero-note">Usually about a minute in Claude Code, Codex, or another coding agent with terminal access.</p>
+      </div>
+
+      <div class="prompt-card" aria-label="Setup prompt for a coding agent">
+        <div class="prompt-bar">
+          <span class="prompt-label">PASTE INTO YOUR CODING AGENT</span>
+          <button class="copy-button" type="button" data-copy="setup-prompt">Copy prompt</button>
+        </div>
+        <pre id="setup-prompt">I want to test verifi.cloud.
+
+Connect its MCP server and set up a secure x402 wallet for this agent. Store the private key securely and show me only the public wallet address.
+
+Make the wallet ready to use Verifi and other x402 services.</pre>
+        <div class="prompt-foot"><strong>That is all the technical instruction it needs.</strong> Your agent handles the connection, wallet, secure key storage, and x402 payment capability.</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="setup">
+    <div class="container">
+      <div class="section-head">
+        <div>
+          <div class="eyebrow">Get started</div>
+          <h2>From one prompt to a working human review.</h2>
+        </div>
+        <p>You tell the agent what you want. It handles the technical setup. You only fund the public wallet address and choose what a human should review.</p>
+      </div>
+
+      <div class="steps">
+        <article class="step featured">
+          <span class="step-number">01</span>
+          <h3>Tell your agent</h3>
+          <p>Paste the prompt above. The agent connects Verifi, creates a dedicated x402 wallet, secures the private key, and returns only the public address.</p>
+          <div class="step-bottom"><a class="button primary" href="#main">View the setup prompt</a></div>
+        </article>
+
+        <article class="step">
+          <span class="step-number">02</span>
+          <h3>Add a little USDC</h3>
+          <p>Send 5 USDC to the public address using the Base network. Your agent needs USDC, not ETH. The wallet remains useful across compatible x402 services.</p>
+          <div class="step-bottom">
+            <div class="network"><span>NETWORK</span><strong>BASE MAINNET</strong></div>
+          </div>
+        </article>
+
+        <article class="step">
+          <span class="step-number">03</span>
+          <h3>Ask a human</h3>
+          <p>Give the agent a real question. It sends the context, waits for the responder, and retrieves the completed answer.</p>
+          <div class="step-bottom">
+            <div class="try-prompt">Use Verifi to ask a human whether this message is clear and convincing. Ask them to improve it if necessary.</div>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="universal">
+    <div class="container">
+      <div class="universal-grid">
+        <div class="universal-copy">
+          <div class="eyebrow">Beyond Verifi</div>
+          <h2>One wallet, many tools.</h2>
+          <p>x402 gives your agent a reusable way to pay compatible online services. Fund the agent once, then let it choose the right paid tool for the job without stopping for a manual checkout.</p>
+        </div>
+        <div class="tool-cloud" aria-label="Examples of x402-compatible tool categories">
+          <div class="tool"><b>Human expertise</b><span>Judgment, review, correction, and decisions through Verifi.</span></div>
+          <div class="tool"><b>AI tools</b><span>Models and specialist capabilities sold per request.</span></div>
+          <div class="tool"><b>Data and research</b><span>Paid sources your agent can call when free data is not enough.</span></div>
+          <div class="tool"><b>APIs and MCP tools</b><span>Any compatible service that accepts x402 payments.</span></div>
+        </div>
+      </div>
+
+      <div class="price-strip" aria-label="Verifi free and paid pricing">
+        <div><strong>First five Verifi reviews</strong><span>Both payment steps are free. The workflow stays exactly the same.</span></div>
+        <div class="price-arrow" aria-hidden="true">&rarr;</div>
+        <div><strong>Then 3 USDC per completed review</strong><span>0.10 USDC enters the queue. 2.90 USDC unlocks the answer.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="closing">
+    <div class="container">
+      <h2>No Verifi account. No Verifi API key. <span>No manual checkout.</span></h2>
+      <p>Give your agent a wallet, add a little Base USDC, and tell it what you need.</p>
+      <div class="closing-actions">
+        <a class="button primary" href="#main">Start with one prompt</a>
+        <a class="button" href="/docs/">Read the API docs</a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="container footer-inner">
+    <span>verifi.cloud, human judgment for AI agents</span>
+    <div class="footer-links"><a href="/">Home</a><a href="/docs/">Docs</a><a href="https://github.com/jyharju-code/verifi">GitHub</a></div>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    const button = document.querySelector('[data-copy]');
+    const prompt = document.getElementById('setup-prompt');
+    if (!button || !prompt) return;
+
+    button.addEventListener('click', async function () {
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(prompt.innerText);
+        } else {
+          const selection = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(prompt);
+          selection.removeAllRanges();
+          selection.addRange(range);
+          if (!document.execCommand('copy')) throw new Error('Copy failed');
+          selection.removeAllRanges();
+        }
+        button.textContent = 'Copied';
+        setTimeout(function () { button.textContent = 'Copy prompt'; }, 1400);
+      } catch (_error) {
+        button.textContent = 'Select text';
+      }
+    });
+  }());
+</script>
+</body>
+</html>
