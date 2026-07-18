@@ -62,7 +62,12 @@ app.post('/verify', async (req, res, next) => {
         detail: 'Retry in a couple of minutes. No payment was taken.',
       });
     }
-    if (quota.has_entry_entitlement) {
+    // Prefer the free/credit path only when an entitlement can actually be
+    // consumed. When the platform's daily free budget is spent, a wallet with
+    // free allowance left falls through to x402 so it can still pay to proceed.
+    const canUseEntitlement = quota.entitlement_admission_available
+      ?? quota.has_entry_entitlement;
+    if (canUseEntitlement) {
       req.admissionMode = 'entitlement';
       return await handleVerify(req, res);
     }

@@ -10,7 +10,7 @@ import logging
 from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from core import config
@@ -31,12 +31,29 @@ def _check_auth(request: Request) -> bool:
     return hmac.compare_digest(supplied, config.DASHBOARD_TOKEN)
 
 
+def _harden(response):
+    # The dashboard exposes wallet addresses, request text, and the audit
+    # trail. Keep it out of caches and referrers so the token and the data do
+    # not leak downstream.
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
 @router.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request):
     if not _check_auth(request):
         raise HTTPException(status_code=401, detail="unauthorized")
-    response = HTMLResponse(DASHBOARD_HTML)
     secure = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+    # When the token arrives in the query string, set the cookie and redirect
+    # to the bare /admin so the token leaves the address bar and browser
+    # history. Subsequent visits authenticate from the HttpOnly cookie.
+    response = (
+        RedirectResponse("/admin", status_code=303)
+        if request.query_params.get("token")
+        else HTMLResponse(DASHBOARD_HTML)
+    )
     response.set_cookie(
         COOKIE,
         config.DASHBOARD_TOKEN,
@@ -46,7 +63,7 @@ async def admin_page(request: Request):
         path="/admin",
         max_age=60 * 60 * 24 * 90,
     )
-    return response
+    return _harden(response)
 
 
 @router.get("/admin/data")
@@ -137,7 +154,7 @@ async def admin_data(request: Request) -> JSONResponse:
         "SELECT at, source, event, actor, details FROM audit_log ORDER BY at DESC LIMIT 25"
     )
 
-    return JSONResponse(
+    return _harden(JSONResponse(
         {
             "totals": {
                 "total": totals["total"],
@@ -233,7 +250,7 @@ async def admin_data(request: Request) -> JSONResponse:
                 for r in audit_rows
             ],
         }
-    )
+    ))
 
 
 class PricingIn(BaseModel):

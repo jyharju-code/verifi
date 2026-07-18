@@ -12,15 +12,18 @@ export const verifyRouter = Router();
 
 const CORE_API = process.env.CORE_API_URL ?? 'http://127.0.0.1:8700';
 const INSTANCE = process.env.INSTANCE_ID ?? 'verify-api';
+// Shared secret for the core money surface. When set, core rejects any
+// /internal call that does not carry it, so payment settlement cannot be
+// forged even if the core port becomes reachable.
+const CORE_INTERNAL_SECRET = process.env.CORE_INTERNAL_SECRET ?? '';
 const EXPIRE_MS = 60 * 60 * 1000;
 const RETRY_AFTER_S = 15;
 const RESOLVED = new Set(['accepted', 'rejected', 'refined']);
 
 export async function coreFetch(path, options = {}) {
-  const resp = await fetch(`${CORE_API}${path}`, {
-    headers: { 'content-type': 'application/json' },
-    ...options,
-  });
+  const headers = { 'content-type': 'application/json', ...(options.headers ?? {}) };
+  if (CORE_INTERNAL_SECRET) headers['x-internal-secret'] = CORE_INTERNAL_SECRET;
+  const resp = await fetch(`${CORE_API}${path}`, { ...options, headers });
   const body = await resp.json().catch(() => ({}));
   return { status: resp.status, body };
 }
@@ -144,9 +147,21 @@ export function recordSettlementOnFinish(res, kind, getVerifyId) {
     if (retriesLeft > 0) {
       setTimeout(() => attempt(retriesLeft - 1, Math.min(delayMs * 2, 60_000)), delayMs);
     } else if (!recorded) {
+      const verifyId = getVerifyId();
       console.error(
-        `SETTLEMENT NOT CAPTURED for verify ${getVerifyId()}: check facilitator logs and reconcile`,
+        `SETTLEMENT NOT CAPTURED for verify ${verifyId}: check facilitator logs and reconcile`,
       );
+      // Make the failure durable and dashboard-visible instead of leaving it
+      // only in stderr. Best effort: if core is unreachable this also fails.
+      const header = res.getHeader('PAYMENT-RESPONSE') ?? res.getHeader('payment-response');
+      let transaction = null;
+      try {
+        if (header) transaction = JSON.parse(Buffer.from(String(header), 'base64').toString('utf8')).transaction ?? null;
+      } catch { /* header unparseable: still alert without a tx */ }
+      coreFetch('/internal/settlement-alerts', {
+        method: 'POST',
+        body: JSON.stringify({ verify_id: String(verifyId ?? ''), kind, transaction, detail: 'capture retries exhausted' }),
+      }).catch((err) => console.error('settlement alert failed:', err.message));
     }
   };
   const start = () => attempt(7, 2_000);
