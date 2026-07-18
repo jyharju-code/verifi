@@ -11,11 +11,13 @@ Endpoints:
 """
 import asyncio
 import contextlib
+import hmac
 import logging
 import os
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from core import config, notify
@@ -33,6 +35,13 @@ log = logging.getLogger("verifi.core-api")
 # Global cap on simultaneously pending verifies: the human queue's overload
 # protection. Above this, new verifies get 503 + Retry-After.
 MAX_PENDING_TOTAL = int(os.environ.get("MAX_PENDING_TOTAL", "25"))
+
+# Shared secret between the instance servers and this core API. The /internal
+# routes settle money and reveal request content, so they must never be trusted
+# on network isolation alone. When set, every /internal request must present it
+# in X-Internal-Secret. Empty keeps the isolation-only behaviour for older
+# deployments that have not provisioned the secret on both sides yet.
+CORE_INTERNAL_SECRET = os.environ.get("CORE_INTERNAL_SECRET", "")
 
 
 class VerifyIn(BaseModel):
@@ -95,7 +104,15 @@ def _row_to_dict(row) -> dict:
 
 
 async def _expire_stale_once() -> int:
-    """Fail timed-out human work and grant one entry-only wallet credit."""
+    """Fail timed-out human work.
+
+    An x402-paid entry that times out gets one entry-only credit, because a
+    real 0.10 USDC settlement was made. An entitlement-funded entry (a free
+    chain or a prior credit) instead releases its entitlement back to the
+    wallet: the free use is not lost, and a credit cannot mint a fresh credit,
+    which is what previously let an expiring chain regenerate free admissions
+    to the human queue indefinitely.
+    """
     db = await get_pool()
     async with db.acquire() as conn:
         async with conn.transaction():
@@ -114,13 +131,15 @@ async def _expire_stale_once() -> int:
                 UPDATE verifies
                 SET status = 'expired', responded_at = now(),
                     failure_reason = 'human_timeout',
-                    failure_credit_granted = agent_id IS NOT NULL
+                    failure_credit_granted = (agent_id IS NOT NULL AND entry_source = 'x402')
                 WHERE status = 'pending' AND expires_at < now()
-                RETURNING id, verify_no, instance, agent_id, associate_id
+                RETURNING id, verify_no, instance, agent_id, associate_id, entry_source
                 """
             )
             for r in rows:
-                if r["agent_id"]:
+                if not r["agent_id"]:
+                    continue
+                if r["entry_source"] == "x402":
                     await conn.execute(
                         """
                         INSERT INTO wallet_entitlements (
@@ -133,6 +152,18 @@ async def _expire_stale_once() -> int:
                         """,
                         r["instance"],
                         r["agent_id"],
+                        r["id"],
+                    )
+                else:
+                    # initial_free or failure_credit: return the entitlement so
+                    # the unanswered chain costs the wallet nothing and no new
+                    # credit is minted.
+                    await conn.execute(
+                        """
+                        UPDATE wallet_entitlements
+                        SET consumed_by_verify_id = NULL, consumed_at = NULL
+                        WHERE consumed_by_verify_id = $1
+                        """,
                         r["id"],
                     )
     for r in abandoned:
@@ -150,14 +181,17 @@ async def _expire_stale_once() -> int:
         )
     for r in rows:
         log.info("verify #V-%s expired", r["verify_no"])
+        credit_granted = bool(r["agent_id"]) and r["entry_source"] == "x402"
         await audit(
             "core-api",
-            "verify_failed_credit_granted",
+            "verify_failed_credit_granted" if credit_granted else "verify_failed_entitlement_returned",
             {
                 "verify_no": r["verify_no"],
                 "verify_id": str(r["id"]),
                 "wallet_address": r["agent_id"],
-                "credit_usdc": "0.10",
+                "entry_source": r["entry_source"],
+                "credit_usdc": "0.10" if credit_granted else "0.00",
+                "entitlement_returned": bool(r["agent_id"]) and not credit_granted,
                 "reason": "human_timeout",
             },
         )
@@ -196,6 +230,24 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Verifi core internal API", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def _guard_internal(request: Request, call_next):
+    """Authenticate the internal money surface with a shared secret.
+
+    Only /internal/* is guarded: /health, /contact, and /admin have their own
+    contracts (liveness, public form, dashboard token). Enforced only when the
+    secret is configured, so it can be rolled out on both sides without a
+    flag day.
+    """
+    if CORE_INTERNAL_SECRET and request.url.path.startswith("/internal/"):
+        supplied = request.headers.get("x-internal-secret", "")
+        if not hmac.compare_digest(supplied, CORE_INTERNAL_SECRET):
+            log.warning("rejected unauthenticated /internal call to %s", request.url.path)
+            return JSONResponse({"detail": "unauthorized"}, status_code=401)
+    return await call_next(request)
+
 
 from core.api.dashboard import router as dashboard_router  # noqa: E402
 
@@ -320,32 +372,71 @@ async def create_verify(body: VerifyIn) -> dict:
 
             if body.admission_mode == "entitlement":
                 allowance = instance["free_tier_count"]
+                # Count free uses actually consumed, not merely ever granted.
+                # A free chain that expires unanswered releases its slot (see
+                # _expire_stale_once), so it is not counted here and the wallet
+                # keeps its promised five complete free chains.
                 free_used = await conn.fetchval(
                     """
                     SELECT count(*) FROM wallet_entitlements
                     WHERE instance = $1 AND lower(wallet_address) = lower($2)
-                      AND kind = 'initial_free'
+                      AND kind = 'initial_free' AND consumed_by_verify_id IS NOT NULL
                     """,
                     body.instance,
                     body.agent_id,
                 )
                 if free_used < allowance:
-                    free_no = free_used + 1
-                    await conn.execute(
+                    # Prefer reclaiming a released free slot over minting a new
+                    # one. This keeps the number of free rows at or below the
+                    # allowance and reuses the original free_use_number.
+                    reusable = await conn.fetchrow(
                         """
-                        INSERT INTO wallet_entitlements (
-                            instance, wallet_address, kind, covers_entry, covers_unlock,
-                            free_use_number, consumed_by_verify_id, consumed_at,
-                            details
-                        )
-                        VALUES ($1, $2, 'initial_free', true, true, $3, $4, now(),
-                                jsonb_build_object('entry_usdc', '0.10', 'unlock_usdc', '2.90'))
+                        SELECT id, free_use_number FROM wallet_entitlements
+                        WHERE instance = $1 AND lower(wallet_address) = lower($2)
+                          AND kind = 'initial_free' AND consumed_by_verify_id IS NULL
+                        ORDER BY free_use_number
+                        LIMIT 1 FOR UPDATE
                         """,
                         body.instance,
                         body.agent_id,
-                        free_no,
-                        verify["id"],
                     )
+                    if reusable is not None:
+                        free_no = reusable["free_use_number"]
+                        await conn.execute(
+                            """
+                            UPDATE wallet_entitlements
+                            SET consumed_by_verify_id = $2, consumed_at = now()
+                            WHERE id = $1
+                            """,
+                            reusable["id"],
+                            verify["id"],
+                        )
+                    else:
+                        free_no = await conn.fetchval(
+                            """
+                            SELECT COALESCE(max(free_use_number), 0) + 1
+                            FROM wallet_entitlements
+                            WHERE instance = $1 AND lower(wallet_address) = lower($2)
+                              AND kind = 'initial_free'
+                            """,
+                            body.instance,
+                            body.agent_id,
+                        )
+                        await conn.execute(
+                            """
+                            INSERT INTO wallet_entitlements (
+                                instance, wallet_address, kind, covers_entry, covers_unlock,
+                                free_use_number, consumed_by_verify_id, consumed_at,
+                                details
+                            )
+                            VALUES ($1, $2, 'initial_free', true, true, $3, $4, now(),
+                                    jsonb_build_object('entry_usdc', '0.10', 'unlock_usdc', '2.90'))
+                            """,
+                            body.instance,
+                            body.agent_id,
+                            free_no,
+                            verify["id"],
+                        )
                     benefit_kind = "initial_free"
                     verify = await conn.fetchrow(
                         """
@@ -647,7 +738,9 @@ async def quota(instance: str, agent_id: str | None = None) -> dict:
         }
     row2 = await db.fetchrow(
         """
-        SELECT count(*) FILTER (WHERE kind = 'initial_free') AS free_used,
+        SELECT count(*) FILTER (
+                   WHERE kind = 'initial_free' AND consumed_by_verify_id IS NOT NULL
+               ) AS free_used,
                count(*) FILTER (
                    WHERE kind = 'failure_credit' AND consumed_by_verify_id IS NULL
                ) AS entry_credits_remaining,

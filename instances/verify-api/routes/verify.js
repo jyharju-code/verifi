@@ -12,15 +12,18 @@ export const verifyRouter = Router();
 
 const CORE_API = process.env.CORE_API_URL ?? 'http://127.0.0.1:8700';
 const INSTANCE = process.env.INSTANCE_ID ?? 'verify-api';
+// Shared secret for the core money surface. When set, core rejects any
+// /internal call that does not carry it, so payment settlement cannot be
+// forged even if the core port becomes reachable.
+const CORE_INTERNAL_SECRET = process.env.CORE_INTERNAL_SECRET ?? '';
 const EXPIRE_MS = 60 * 60 * 1000;
 const RETRY_AFTER_S = 15;
 const RESOLVED = new Set(['accepted', 'rejected', 'refined']);
 
 export async function coreFetch(path, options = {}) {
-  const resp = await fetch(`${CORE_API}${path}`, {
-    headers: { 'content-type': 'application/json' },
-    ...options,
-  });
+  const headers = { 'content-type': 'application/json', ...(options.headers ?? {}) };
+  if (CORE_INTERNAL_SECRET) headers['x-internal-secret'] = CORE_INTERNAL_SECRET;
+  const resp = await fetch(`${CORE_API}${path}`, { ...options, headers });
   const body = await resp.json().catch(() => ({}));
   return { status: resp.status, body };
 }

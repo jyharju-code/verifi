@@ -57,31 +57,45 @@ def _public_payload(row) -> dict:
     return payload
 
 
-def _ssrf_safe(url: str) -> tuple[bool, str]:
+def _resolve_pinned(url: str) -> tuple[bool, str, str | None, str | None, str | None]:
+    """Validate a callback URL and pin it to a resolved public IP.
+
+    Returns (ok, reason, pinned_url, host_header, sni_host). The pinned URL
+    connects straight to the validated IP, so the address cannot change
+    between this check and the request (DNS rebinding). TLS still verifies the
+    certificate against the original hostname via the SNI host.
+    """
     try:
         parsed = urlparse(url)
     except ValueError:
-        return False, "unparseable url"
+        return False, "unparseable url", None, None, None
     if parsed.scheme != "https":
-        return False, "https required"
+        return False, "https required", None, None, None
     if parsed.port is not None and parsed.port != 443:
-        return False, "port 443 only"
+        return False, "port 443 only", None, None, None
     if not parsed.hostname or parsed.username or parsed.password:
-        return False, "invalid host"
+        return False, "invalid host", None, None, None
     try:
         infos = socket.getaddrinfo(parsed.hostname, 443, proto=socket.IPPROTO_TCP)
     except socket.gaierror:
-        return False, "hostname does not resolve"
+        return False, "hostname does not resolve", None, None, None
+    pinned_ip = None
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
         if not ip.is_global or ip.is_multicast:
-            return False, f"resolves to non-public address"
-    return True, "ok"
+            return False, "resolves to non-public address", None, None, None
+        if pinned_ip is None:
+            pinned_ip = info[4][0]
+    if pinned_ip is None:
+        return False, "hostname does not resolve", None, None, None
+    host_literal = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
+    pinned_url = parsed._replace(netloc=f"{host_literal}:443").geturl()
+    return True, "ok", pinned_url, parsed.netloc, parsed.hostname
 
 
 async def _deliver_one(db, row) -> None:
     attempt = row["callback_attempts"] + 1
-    ok, reason = _ssrf_safe(row["callback_url"])
+    ok, reason, pinned_url, host_header, sni_host = _resolve_pinned(row["callback_url"])
     delivered = False
     detail = reason
     if ok:
@@ -90,9 +104,10 @@ async def _deliver_one(db, row) -> None:
                 timeout=10, follow_redirects=False, max_redirects=0
             ) as client:
                 resp = await client.post(
-                    row["callback_url"],
+                    pinned_url,
                     json=_public_payload(row),
-                    headers={"user-agent": "verifi-webhook/1.0"},
+                    headers={"user-agent": "verifi-webhook/1.0", "host": host_header},
+                    extensions={"sni_hostname": sni_host},
                 )
             delivered = 200 <= resp.status_code < 300
             detail = f"http {resp.status_code}"
