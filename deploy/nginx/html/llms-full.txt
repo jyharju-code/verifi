@@ -1,0 +1,341 @@
+# Verifi Agent API, full reference, contract version 2
+
+Verifi sends agent requests to real humans and returns the human verdict. Human work takes minutes, so the API is asynchronous and resumable through a durable verify_id.
+
+Short version of this file: https://verifi.cloud/llms.txt
+OpenAPI 3.1 spec: https://verifi.cloud/openapi.json
+Human readable docs: https://verifi.cloud/docs/
+MCP endpoint: https://verifi.cloud/mcp
+
+No API key, signup, account, or whitelist. The requester wallet address is the only identity. It marks free use and signs paid x402 authorizations.
+
+## The chain
+
+One verification is one chain with two explicit gates.
+
+1. Gate 1, POST /verify, 0.10 USDC. Admits the request to the human queue. A paid chain does not reach a human before its entry settlement is recorded.
+2. A human reads the request and answers accept, reject, or a refined free text correction.
+3. Gate 2, POST /verify-unlock, 2.90 USDC. Releases the answer.
+
+Total for one successful paid chain: 0.10 + 2.90 = 3.00 USDC.
+
+The first five complete chains per wallet are free at both gates. Free and paid chains are identical in queue, human workflow, timing, statuses, and response shape. Only the funding block differs.
+
+## Pricing
+
+| Chain | Gate 1 | Gate 2 | Total |
+|---|---|---|---|
+| Free chains 1 to 5 per wallet | 0.00 | 0.00 | 0.00 |
+| Every chain after that | 0.10 | 2.90 | 3.00 |
+| Chain funded by a failure credit | 0.00 | 2.90 | 2.90 |
+
+Amounts are USDC on Base mainnet. Polling never costs money. A 429 or 503 admission answer is never charged, because capacity is checked before gate 1 payment.
+
+## Funding and credits
+
+initial_free: every wallet gets five. One entitlement covers both gates of one chain. Free use is counted when a chain actually completes, so an unanswered free chain does not consume one of the five.
+
+failure_credit: worth 0.10 USDC, covers gate 1 of the next chain only. Gate 2 still costs 2.90 USDC.
+
+What happens when an admitted chain expires without an answer depends on how gate 1 was funded:
+
+- Gate 1 paid with x402: the wallet receives one failure_credit, because real money was spent.
+- Gate 1 funded by an entitlement, either a free chain or an earlier credit: that entitlement is returned to the wallet. The free chain is not lost and no new credit is minted.
+
+Read failure.entry_credit_granted in the failed response to see which happened.
+
+## Statuses
+
+- processing: admission is settling or a human is working. Poll again, honor retry_after_seconds.
+- ready: a human answered but the result is locked. Call unlock.
+- failed: no redeemable result will be produced. Stop.
+- completed: gate 2 passed. verdict, explanation, and response are populated.
+
+Follow next_action instead of inferring behavior from status. It is one of poll, unlock, stop, done.
+
+Human verdict vocabulary: true, false, refined. When the verdict is refined, the human's improved text is in explanation and response.
+
+## Full example, paid chain with curl
+
+Step 1, submit. Without an entitlement this answers 402 with the gate 1 requirement.
+
+```
+curl -sS -X POST https://verifi.cloud/verify \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "intent": "Publish a launch note to customers",
+    "claim": "The new pricing takes effect on 1 September and existing customers keep the old price until renewal.",
+    "agent_id": "0x1111111111111111111111111111111111111111",
+    "callback_url": "https://agent.example.com/verifi-events"
+  }'
+```
+
+402 answer, gate 1 requirement. The same object is base64 encoded in the PAYMENT-REQUIRED header.
+
+```
+{
+  "x402Version": 2,
+  "accepts": [{
+    "scheme": "exact",
+    "network": "eip155:8453",
+    "resource": "https://verifi.cloud/verify",
+    "description": "Gate 1 of one Verifi chain. Admit one request to the human queue.",
+    "payTo": "0xTHE_RECEIVING_ADDRESS",
+    "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "maxAmountRequired": "100000"
+  }],
+  "error": "0.10 USDC payment is required. Sign it with the requester wallet and retry."
+}
+```
+
+Sign one entry from accepts with the requester wallet and repeat the identical request with the authorization in the PAYMENT-SIGNATURE header. An x402 aware client such as @x402/fetch does this automatically.
+
+```
+curl -sS -X POST https://verifi.cloud/verify \
+  -H 'Content-Type: application/json' \
+  -H 'PAYMENT-SIGNATURE: <base64 signed x402 authorization>' \
+  -d '{ "intent": "...", "claim": "...", "agent_id": "0x1111111111111111111111111111111111111111" }'
+```
+
+202 answer. Persist verify_id. It is the only durable handle for the chain.
+
+```
+{
+  "verify_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+  "status": "processing",
+  "human_status": null,
+  "verdict": null,
+  "explanation": null,
+  "response": null,
+  "response_time_ms": null,
+  "wallet_address": "0x1111111111111111111111111111111111111111",
+  "funding": {
+    "entry_source": "x402",
+    "free_use_number": null,
+    "entry_list_price_usdc": "0.10",
+    "entry_charged_usdc": "0.10",
+    "unlock_source": null,
+    "unlock_list_price_usdc": "2.90",
+    "unlock_charged_usdc": "0.00",
+    "total_list_price_usdc": "3.00",
+    "total_charged_usdc": "0.10"
+  },
+  "created_at": "2026-07-18T09:00:00.000Z",
+  "admitted_at": "2026-07-18T09:00:00.100Z",
+  "expires_at": "2026-07-18T10:00:00.000Z",
+  "responded_at": null,
+  "unlocked_at": null,
+  "next_action": "poll",
+  "poll_url": "/verify/0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+  "retry_after_seconds": 15,
+  "response_timeout_ms": 3600000,
+  "message": "Admission accepted. Poll until status is ready or failed."
+}
+```
+
+Step 2, wait. Prefer the callback. Poll only as the recovery path.
+
+```
+curl -sS https://verifi.cloud/verify/0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11
+```
+
+While processing, the answer keeps next_action poll and repeats retry_after_seconds. Do not assume a short fixed deadline: a human may take minutes.
+
+When the human has answered, status becomes ready and the result is still locked.
+
+```
+{
+  "verify_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+  "status": "ready",
+  "verdict": null,
+  "explanation": null,
+  "response": null,
+  "responded_at": "2026-07-18T09:04:12.000Z",
+  "next_action": "unlock",
+  "unlock": {
+    "method": "POST",
+    "url": "/verify-unlock?id=0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+    "price_usdc": "2.90",
+    "payment_required": true,
+    "funded_by": "x402"
+  }
+}
+```
+
+Step 3, unlock. Without an entitlement this answers 402 with the gate 2 requirement for 2.90 USDC. Sign it and repeat, exactly like gate 1.
+
+```
+curl -sS -X POST 'https://verifi.cloud/verify-unlock?id=0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11' \
+  -H 'PAYMENT-SIGNATURE: <base64 signed x402 authorization>'
+```
+
+200 answer, completed. The result body is released only after the gate 2 settlement succeeds.
+
+```
+{
+  "verify_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+  "status": "completed",
+  "human_status": "refined",
+  "verdict": "refined",
+  "explanation": "Correct except the date. Pricing starts 1 October, not 1 September.",
+  "response": "Correct except the date. Pricing starts 1 October, not 1 September.",
+  "response_time_ms": 252000,
+  "wallet_address": "0x1111111111111111111111111111111111111111",
+  "funding": {
+    "entry_source": "x402",
+    "free_use_number": null,
+    "entry_list_price_usdc": "0.10",
+    "entry_charged_usdc": "0.10",
+    "unlock_source": "x402",
+    "unlock_list_price_usdc": "2.90",
+    "unlock_charged_usdc": "2.90",
+    "total_list_price_usdc": "3.00",
+    "total_charged_usdc": "3.00"
+  },
+  "unlocked_at": "2026-07-18T09:05:01.000Z",
+  "next_action": "done"
+}
+```
+
+Unlocking twice does not charge twice. Once the chain is completed, the answer is returned without a new payment.
+
+## Failed chain
+
+```
+{
+  "verify_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+  "status": "failed",
+  "next_action": "stop",
+  "failure": {
+    "reason": "human_timeout",
+    "entry_credit_granted": true,
+    "entry_credit_value_usdc": "0.10"
+  }
+}
+```
+
+reason values:
+
+- human_timeout: nobody answered within 60 minutes.
+- entry_not_settled: the gate 1 settlement never arrived, so the chain never entered the queue.
+- processing_failed: the chain ended without a redeemable result for another reason.
+
+Stop after failed. Do not retry the same verify_id: start a new chain.
+
+## Free chain
+
+A free chain looks identical, only the funding block differs, and gate 2 needs no payment.
+
+```
+"funding": {
+  "entry_source": "initial_free",
+  "free_use_number": 1,
+  "entry_charged_usdc": "0.00",
+  "unlock_charged_usdc": "0.00",
+  "total_charged_usdc": "0.00"
+}
+```
+
+When status is ready on a free chain, unlock.payment_required is false and funded_by is initial_free. Call the same unlock endpoint with no payment.
+
+## Callbacks
+
+Pass callback_url on POST /verify to avoid an active polling loop.
+
+Events: verify.ready and verify.failed. Delivery is an HTTPS POST with a JSON body, at least once, up to 3 attempts, backoff 0s, 60s, 300s. Any 2xx counts as delivered. The response body is ignored.
+
+The callback never carries the locked result. It tells you the next action.
+
+```
+{
+  "event": "verify.ready",
+  "verify_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+  "status": "ready",
+  "verdict": null,
+  "explanation": null,
+  "response": null,
+  "next_action": "unlock",
+  "poll_url": "/verify/0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+  "responded_at": "2026-07-18T09:04:12.000Z",
+  "unlock": {
+    "method": "POST",
+    "url": "/verify-unlock?id=0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+    "price_usdc": "2.90",
+    "payment_required": true
+  }
+}
+```
+
+A verify.failed event carries the same failure block as the polled answer.
+
+callback_url requirements: https only, default port 443, no credentials in the URL, and the hostname must resolve to a public address. Redirects are not followed. The connection is pinned to the validated address, so a hostname that changes to a private address between check and request is rejected.
+
+Persist verify_id anyway. If delivery fails after 3 attempts, polling remains the recovery path.
+
+## x402 payments
+
+x402 version 2, exact scheme, USDC on Base mainnet.
+
+- Network: eip155:8453 (Base mainnet)
+- Token: USDC at 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+- Decimals: 6. So 0.10 USDC is 100000 and 2.90 USDC is 2900000.
+- Authorization: EIP-3009 transfer with authorization. The signature covers the exact amount, the exact recipient, and a validity window, and it is valid once.
+- The buyer needs no ETH. The facilitator pays the gas and submits the settlement. USDC alone is enough.
+- Funds move from the buyer wallet directly to the receiving address. They never pass through Verifi.
+
+Gate 1 and gate 2 are separate authorizations, separate settlements, and separate transaction hashes tied to the same verify_id.
+
+Flow: call the endpoint, read the 402, sign one option from accepts, repeat the identical request with PAYMENT-SIGNATURE. After a successful gate the answer carries PAYMENT-RESPONSE, a base64 receipt with the transaction hash.
+
+Never send a private key. Verifi only ever receives a signed, single use authorization.
+
+Buyer quickstart: https://docs.x402.org/getting-started/quickstart-for-buyers
+
+## MCP
+
+Endpoint: https://verifi.cloud/mcp, Streamable HTTP. Server name verifi, version 2.0.0.
+
+Tools:
+
+- verify_claim(intent, claim, agent_id, callback_url?, payment_signature?): gate 1. Returns status processing with a verify_id.
+- get_verify(verify_id): poll. Never costs money.
+- unlock_verify(verify_id, payment_signature?): gate 2. Returns the human result.
+- verifi_info(): service description, pricing, and rules. Free.
+
+Free and paid chains use the same tools. When a gate needs payment, the tool returns a standard x402 PaymentRequired result with x402Version, accepts, and the resource. An x402 aware MCP client signs the requirement with the requester wallet and repeats the same tool call, passing the payment through x402/payment request metadata. A successful paid call returns x402/payment-response metadata containing the settlement receipt.
+
+Generic MCP clients that do not implement x402 metadata can pass the encoded authorization through the optional payment_signature argument instead.
+
+Gate 1 and gate 2 need separate signatures tied to the same verify_id. Never send a private key.
+
+## Rules and limits
+
+- One active chain per wallet. Submitting a second one while the first is unresolved answers 429 and charges nothing.
+- Unanswered human work expires 60 minutes after creation.
+- intent: 1 to 2000 characters. claim: 1 to 4000 characters. Request body limit 32 kB.
+- agent_id must match ^0x[0-9a-fA-F]{40}$.
+- GET polling never costs money and never reveals a locked result.
+- Queue capacity is checked before gate 1 payment. A full queue answers 503 with Retry-After and charges nothing.
+- A real human reads every request. Do not spam.
+
+## Error codes
+
+- 400: validation failed. Bad agent_id, missing or oversized intent or claim, bad callback_url, or a verify id that is not a UUID. Fix the request.
+- 402: payment required. The body and the PAYMENT-REQUIRED header carry the x402 requirement. Sign it and repeat the identical request.
+- 404: unknown verify_id.
+- 409: lifecycle conflict. Unlock was called before the human answered, or on a failed chain, or the wallet's entitlement was consumed by a concurrent request. Read the error and status fields.
+- 429: the wallet already has an active chain. Wait for it to complete or fail. Nothing was charged.
+- 502: the verification backend is temporarily unavailable. Nothing was charged. Retry.
+- 503: the human queue is full, or a paid gate is not configured. Honor Retry-After. Nothing was charged.
+
+## Audit and data
+
+PostgreSQL is the single source of truth. Every process survives a restart: there is no in-memory state.
+
+Stored per chain: wallet address, request content, both list prices, both charged amounts, both settlement transaction hashes, the payer for each gate, lifecycle timestamps, which of the five free uses was consumed, failure credits with their source chain and their consuming chain, and callback delivery attempts.
+
+audit_log is append-only. Every money event writes to it: chain created, entitlement consumed, payment recorded, entitlement returned, credit granted, result unlocked, payout recorded, price changed.
+
+Settlements are journaled before they are applied, and a reconciliation loop finishes any settlement whose apply was interrupted, so a settled payment is not lost.
+
+Every transfer is also recorded on Base, which is a public receipt independent of Verifi.
