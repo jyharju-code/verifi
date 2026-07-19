@@ -1,0 +1,1010 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Verifi Agent API",
+    "summary": "Human judgment your AI agent can call, paid per request with x402.",
+    "description": "Verifi routes an agent request to a real human and returns the human verdict.\n\nEvery verification is one chain with two explicit gates. Gate 1 (0.10 USDC) admits the request to the human queue. Gate 2 (2.90 USDC) unlocks the ready result. The first five complete chains per wallet are free at both gates.\n\nHuman work takes minutes, so the API is asynchronous and resumable through a durable verify_id. Prefer callback_url over polling. No API key, signup, or account is required: the requester wallet address is the identity.\n\nContract version 2.",
+    "version": "2.0.0",
+    "contact": {
+      "name": "Verifi",
+      "url": "https://verifi.cloud/contact"
+    },
+    "license": {
+      "name": "Proprietary",
+      "url": "https://verifi.cloud/"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://verifi.cloud",
+      "description": "Production"
+    }
+  ],
+  "externalDocs": {
+    "description": "Human readable docs and the machine readable agent brief",
+    "url": "https://verifi.cloud/docs/"
+  },
+  "tags": [
+    {
+      "name": "verify",
+      "description": "The two-gate verification chain."
+    },
+    {
+      "name": "service",
+      "description": "Liveness and service metadata."
+    }
+  ],
+  "paths": {
+    "/verify": {
+      "post": {
+        "tags": ["verify"],
+        "operationId": "createVerify",
+        "summary": "Gate 1: submit a claim and enter the human queue",
+        "description": "Submits work for a human and admits it to the queue.\n\nFunding is decided per wallet. If the wallet still has one of its five free chains, or an entry credit, admission is free and the response is 202. Otherwise the endpoint answers 402 with x402 payment requirements for 0.10 USDC. Sign the requirement with the requester wallet and repeat the same request.\n\nA paid chain does not enter the human queue before its entry settlement is recorded. Admission capacity is checked before payment, so a 429 or 503 answer never charges the caller.\n\nStore verify_id from the response. It is the only durable handle for the rest of the chain.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PaymentSignature"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyRequest"
+              },
+              "examples": {
+                "polling": {
+                  "summary": "Minimal request, agent polls for the result",
+                  "value": {
+                    "intent": "Publish a launch note to customers",
+                    "claim": "The new pricing takes effect on 1 September and existing customers keep the old price until renewal.",
+                    "agent_id": "0x1111111111111111111111111111111111111111"
+                  }
+                },
+                "callback": {
+                  "summary": "Preferred: receive an event instead of polling",
+                  "value": {
+                    "intent": "Publish a launch note to customers",
+                    "claim": "The new pricing takes effect on 1 September and existing customers keep the old price until renewal.",
+                    "agent_id": "0x1111111111111111111111111111111111111111",
+                    "callback_url": "https://agent.example.com/verifi-events"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Admitted. A human will see the request. Poll or wait for the callback.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              },
+              "PAYMENT-RESPONSE": {
+                "$ref": "#/components/headers/PaymentResponse"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyAccepted"
+                },
+                "examples": {
+                  "freeChain": {
+                    "summary": "First five chains per wallet: both gates free",
+                    "value": {
+                      "verify_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+                      "status": "processing",
+                      "human_status": null,
+                      "verdict": null,
+                      "explanation": null,
+                      "response": null,
+                      "response_time_ms": null,
+                      "wallet_address": "0x1111111111111111111111111111111111111111",
+                      "funding": {
+                        "entry_source": "initial_free",
+                        "free_use_number": 1,
+                        "entry_list_price_usdc": "0.10",
+                        "entry_charged_usdc": "0.00",
+                        "unlock_source": null,
+                        "unlock_list_price_usdc": "2.90",
+                        "unlock_charged_usdc": "0.00",
+                        "total_list_price_usdc": "3.00",
+                        "total_charged_usdc": "0.00"
+                      },
+                      "created_at": "2026-07-18T09:00:00.000Z",
+                      "admitted_at": "2026-07-18T09:00:00.100Z",
+                      "expires_at": "2026-07-18T10:00:00.000Z",
+                      "responded_at": null,
+                      "unlocked_at": null,
+                      "next_action": "poll",
+                      "poll_url": "/verify/0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+                      "retry_after_seconds": 15,
+                      "response_timeout_ms": 3600000,
+                      "message": "Admission accepted. Poll until status is ready or failed."
+                    }
+                  },
+                  "paidChain": {
+                    "summary": "Paid chain after the x402 entry settlement",
+                    "value": {
+                      "verify_id": "6b2a1f6e-9a0d-4a2b-91c6-8f0f2d5a7c33",
+                      "status": "processing",
+                      "wallet_address": "0x1111111111111111111111111111111111111111",
+                      "funding": {
+                        "entry_source": "x402",
+                        "free_use_number": null,
+                        "entry_list_price_usdc": "0.10",
+                        "entry_charged_usdc": "0.10",
+                        "unlock_source": null,
+                        "unlock_list_price_usdc": "2.90",
+                        "unlock_charged_usdc": "0.00",
+                        "total_list_price_usdc": "3.00",
+                        "total_charged_usdc": "0.10"
+                      },
+                      "next_action": "poll",
+                      "poll_url": "/verify/6b2a1f6e-9a0d-4a2b-91c6-8f0f2d5a7c33",
+                      "retry_after_seconds": 15,
+                      "response_timeout_ms": 3600000,
+                      "message": "Admission accepted. Poll until status is ready or failed."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "402": {
+            "$ref": "#/components/responses/PaymentRequiredEntry"
+          },
+          "409": {
+            "description": "The wallet's entry entitlement was consumed by a concurrent request. Retry: the next answer carries x402 payment requirements.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "entry entitlement was consumed by another request",
+                  "detail": "Retry POST /verify. The next response will contain x402 payment requirements."
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The wallet already has an active chain. One active chain per wallet is allowed. Nothing was charged.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "one active verify per agent_id",
+                  "detail": "Poll the previous verify until it is completed or failed."
+                }
+              }
+            }
+          },
+          "502": {
+            "$ref": "#/components/responses/BackendUnavailable"
+          },
+          "503": {
+            "description": "The human queue is full, or paid admission is not configured. Nothing was charged. Retry after the advertised delay.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "human queue is full",
+                  "detail": "Retry in a couple of minutes. No payment was taken."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/verify/{verify_id}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/VerifyIdPath"
+        }
+      ],
+      "get": {
+        "tags": ["verify"],
+        "operationId": "getVerify",
+        "summary": "Poll the state of a chain",
+        "description": "Returns the current state. Polling never costs money and never reveals a locked result.\n\nWhile status is processing, honor retry_after_seconds. Human work can take several minutes, so do not assume a short fixed deadline. Prefer callback_url and use polling as the recovery path.",
+        "responses": {
+          "200": {
+            "description": "Current state of the chain.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyState"
+                },
+                "examples": {
+                  "processing": {
+                    "summary": "A human is working. Poll again.",
+                    "value": {
+                      "verify_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+                      "status": "processing",
+                      "verdict": null,
+                      "explanation": null,
+                      "response": null,
+                      "next_action": "poll",
+                      "poll_url": "/verify/0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+                      "retry_after_seconds": 15
+                    }
+                  },
+                  "ready": {
+                    "summary": "A human answered. The result is locked behind gate 2.",
+                    "value": {
+                      "verify_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+                      "status": "ready",
+                      "verdict": null,
+                      "explanation": null,
+                      "response": null,
+                      "responded_at": "2026-07-18T09:04:12.000Z",
+                      "next_action": "unlock",
+                      "unlock": {
+                        "method": "POST",
+                        "url": "/verify-unlock?id=0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+                        "price_usdc": "2.90",
+                        "payment_required": true,
+                        "funded_by": "x402"
+                      }
+                    }
+                  },
+                  "failed": {
+                    "summary": "No redeemable result will be produced. Stop.",
+                    "value": {
+                      "verify_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+                      "status": "failed",
+                      "next_action": "stop",
+                      "failure": {
+                        "reason": "human_timeout",
+                        "entry_credit_granted": true,
+                        "entry_credit_value_usdc": "0.10"
+                      }
+                    }
+                  },
+                  "completed": {
+                    "summary": "Gate 2 already passed. The answer is visible.",
+                    "value": {
+                      "verify_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+                      "status": "completed",
+                      "human_status": "refined",
+                      "verdict": "refined",
+                      "explanation": "Correct except the date. Pricing starts 1 October, not 1 September.",
+                      "response": "Correct except the date. Pricing starts 1 October, not 1 September.",
+                      "response_time_ms": 252000,
+                      "next_action": "done"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The verify id is not a UUID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "invalid verify id"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "502": {
+            "$ref": "#/components/responses/BackendUnavailable"
+          }
+        }
+      }
+    },
+    "/verify-unlock": {
+      "post": {
+        "tags": ["verify"],
+        "operationId": "unlockVerify",
+        "summary": "Gate 2: unlock the ready human result",
+        "description": "Call this only when status is ready.\n\nIf the chain was funded by one of the wallet's five free entitlements, the same entitlement covers gate 2 and the answer returns immediately. Otherwise the endpoint answers 402 with x402 payment requirements for 2.90 USDC. Sign the requirement with the requester wallet and repeat the same request.\n\nThe result body is released only after the gate 2 settlement succeeds. Unlocking twice does not charge twice: once the chain is completed, the answer is returned without a new payment.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/VerifyIdQuery"
+          },
+          {
+            "$ref": "#/components/parameters/PaymentSignature"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed. The human answer is included.",
+            "headers": {
+              "PAYMENT-RESPONSE": {
+                "$ref": "#/components/headers/PaymentResponse"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyState"
+                },
+                "example": {
+                  "verify_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+                  "status": "completed",
+                  "human_status": "refined",
+                  "verdict": "refined",
+                  "explanation": "Correct except the date. Pricing starts 1 October, not 1 September.",
+                  "response": "Correct except the date. Pricing starts 1 October, not 1 September.",
+                  "response_time_ms": 252000,
+                  "wallet_address": "0x1111111111111111111111111111111111111111",
+                  "funding": {
+                    "entry_source": "x402",
+                    "free_use_number": null,
+                    "entry_list_price_usdc": "0.10",
+                    "entry_charged_usdc": "0.10",
+                    "unlock_source": "x402",
+                    "unlock_list_price_usdc": "2.90",
+                    "unlock_charged_usdc": "2.90",
+                    "total_list_price_usdc": "3.00",
+                    "total_charged_usdc": "3.00"
+                  },
+                  "unlocked_at": "2026-07-18T09:05:01.000Z",
+                  "next_action": "done"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id query parameter is missing or is not a UUID.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "pass the verify id as ?id=<uuid>"
+                }
+              }
+            }
+          },
+          "402": {
+            "$ref": "#/components/responses/PaymentRequiredUnlock"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The chain is not in a state that can be unlocked: the human has not answered yet, or the chain failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "notReady": {
+                    "value": {
+                      "error": "result is not ready",
+                      "status": "processing"
+                    }
+                  },
+                  "failed": {
+                    "value": {
+                      "error": "failed verifies cannot be unlocked",
+                      "status": "failed"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "502": {
+            "$ref": "#/components/responses/BackendUnavailable"
+          },
+          "503": {
+            "description": "Paid unlock is not configured on this deployment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "paid unlock is not configured"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/verify/{verify_id}/unlock": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/VerifyIdPath"
+        }
+      ],
+      "post": {
+        "tags": ["verify"],
+        "operationId": "unlockVerifyLegacy",
+        "summary": "Legacy unlock path",
+        "description": "Permanent redirect to POST /verify-unlock?id={verify_id}. The method and body are preserved.",
+        "responses": {
+          "308": {
+            "description": "Permanent redirect to the canonical unlock endpoint.",
+            "headers": {
+              "Location": {
+                "description": "The canonical unlock URL.",
+                "schema": {
+                  "type": "string",
+                  "examples": ["/verify-unlock?id=0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/verify-api/health": {
+      "get": {
+        "tags": ["service"],
+        "operationId": "health",
+        "summary": "Liveness probe",
+        "responses": {
+          "200": {
+            "description": "The API is up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "VerifyIdPath": {
+        "name": "verify_id",
+        "in": "path",
+        "required": true,
+        "description": "The durable chain handle returned by POST /verify.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "example": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11"
+      },
+      "VerifyIdQuery": {
+        "name": "id",
+        "in": "query",
+        "required": true,
+        "description": "The durable chain handle returned by POST /verify.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "example": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11"
+      },
+      "PaymentSignature": {
+        "name": "PAYMENT-SIGNATURE",
+        "in": "header",
+        "required": false,
+        "description": "Base64 encoded x402 payment payload. x402 aware clients such as @x402/fetch add this automatically when they retry a 402. Never send a private key: this is a signed, single use authorization.",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "headers": {
+      "RetryAfter": {
+        "description": "Seconds to wait before the next call.",
+        "schema": {
+          "type": "integer"
+        },
+        "example": 15
+      },
+      "PaymentRequired": {
+        "description": "Base64 encoded x402 payment requirements. Decode it to get the PaymentRequired object.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "PaymentResponse": {
+        "description": "Base64 encoded x402 settlement receipt, present after a paid gate succeeds. Decode it to get the PaymentResponse object.",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "The request body failed validation.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "examples": {
+              "wallet": {
+                "value": {
+                  "error": "agent_id must be the requester wallet address (0x + 40 hex characters)"
+                }
+              },
+              "fields": {
+                "value": {
+                  "error": "intent and claim are required strings"
+                }
+              },
+              "length": {
+                "value": {
+                  "error": "intent max 2000 chars, claim max 4000 chars"
+                }
+              },
+              "callback": {
+                "value": {
+                  "error": "callback_url must be an https URL, max 2048 chars"
+                }
+              }
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "No chain exists for that verify_id.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "verify not found"
+            }
+          }
+        }
+      },
+      "BackendUnavailable": {
+        "description": "The verification backend is temporarily unavailable. Nothing was charged. Retry.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "verification backend unavailable"
+            }
+          }
+        }
+      },
+      "PaymentRequiredEntry": {
+        "description": "Gate 1 requires payment: 0.10 USDC on Base mainnet. Sign the requirement with the requester wallet and repeat the same request. The requirement is also in the PAYMENT-REQUIRED header.",
+        "headers": {
+          "PAYMENT-REQUIRED": {
+            "$ref": "#/components/headers/PaymentRequired"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/PaymentRequired"
+            },
+            "example": {
+              "x402Version": 2,
+              "accepts": [
+                {
+                  "scheme": "exact",
+                  "network": "eip155:8453",
+                  "resource": "https://verifi.cloud/verify",
+                  "description": "Gate 1 of one Verifi chain. Admit one request to the human queue.",
+                  "mimeType": "application/json",
+                  "payTo": "0x0000000000000000000000000000000000000000",
+                  "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                  "maxAmountRequired": "100000"
+                }
+              ],
+              "error": "0.10 USDC payment is required. Sign it with the requester wallet and retry."
+            }
+          }
+        }
+      },
+      "PaymentRequiredUnlock": {
+        "description": "Gate 2 requires payment: 2.90 USDC on Base mainnet. Sign the requirement with the requester wallet and repeat the same request.",
+        "headers": {
+          "PAYMENT-REQUIRED": {
+            "$ref": "#/components/headers/PaymentRequired"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/PaymentRequired"
+            },
+            "example": {
+              "x402Version": 2,
+              "accepts": [
+                {
+                  "scheme": "exact",
+                  "network": "eip155:8453",
+                  "resource": "https://verifi.cloud/verify-unlock",
+                  "description": "Gate 2 of the same Verifi chain. Unlock its ready human result.",
+                  "mimeType": "application/json",
+                  "payTo": "0x0000000000000000000000000000000000000000",
+                  "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                  "maxAmountRequired": "2900000"
+                }
+              ],
+              "error": "2.90 USDC payment is required. Sign it with the requester wallet and retry unlock_verify."
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "VerifyRequest": {
+        "type": "object",
+        "required": ["intent", "claim", "agent_id"],
+        "additionalProperties": false,
+        "properties": {
+          "intent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "description": "What your agent is trying to do. Gives the human the context to judge the claim.",
+            "examples": ["Publish a launch note to customers"]
+          },
+          "claim": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4000,
+            "description": "The claim, draft, or question a human should judge.",
+            "examples": ["The new pricing takes effect on 1 September."]
+          },
+          "agent_id": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$",
+            "description": "The requester wallet address. It identifies free use and signs paid x402 authorizations. No account or API key exists beyond this address.",
+            "examples": ["0x1111111111111111111111111111111111111111"]
+          },
+          "callback_url": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 2048,
+            "description": "Optional HTTPS endpoint that receives verify.ready or verify.failed. Preferred over polling. It never carries the locked result, only the next action. Must be https on port 443 and must resolve to a public address.",
+            "examples": ["https://agent.example.com/verifi-events"]
+          }
+        }
+      },
+      "Funding": {
+        "type": "object",
+        "description": "Exactly what this chain was charged, per gate. All amounts are decimal strings in USDC.",
+        "properties": {
+          "entry_source": {
+            "type": ["string", "null"],
+            "enum": ["initial_free", "failure_credit", "x402", null],
+            "description": "How gate 1 was funded."
+          },
+          "free_use_number": {
+            "type": ["integer", "null"],
+            "minimum": 1,
+            "maximum": 5,
+            "description": "Which of the wallet's five free chains this is, when funded by initial_free."
+          },
+          "entry_list_price_usdc": {
+            "type": "string",
+            "examples": ["0.10"]
+          },
+          "entry_charged_usdc": {
+            "type": "string",
+            "examples": ["0.10", "0.00"]
+          },
+          "unlock_source": {
+            "type": ["string", "null"],
+            "enum": ["initial_free", "x402", null],
+            "description": "How gate 2 was funded. Null until the result is unlocked."
+          },
+          "unlock_list_price_usdc": {
+            "type": "string",
+            "examples": ["2.90"]
+          },
+          "unlock_charged_usdc": {
+            "type": "string",
+            "examples": ["2.90", "0.00"]
+          },
+          "total_list_price_usdc": {
+            "type": "string",
+            "examples": ["3.00"]
+          },
+          "total_charged_usdc": {
+            "type": "string",
+            "examples": ["3.00", "0.00"]
+          }
+        }
+      },
+      "UnlockAction": {
+        "type": "object",
+        "description": "How to pass gate 2. Present when status is ready.",
+        "properties": {
+          "method": {
+            "type": "string",
+            "examples": ["POST"]
+          },
+          "url": {
+            "type": "string",
+            "examples": ["/verify-unlock?id=0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11"]
+          },
+          "price_usdc": {
+            "type": "string",
+            "examples": ["2.90", "0.00"]
+          },
+          "payment_required": {
+            "type": "boolean",
+            "description": "False when a free entitlement covers gate 2."
+          },
+          "funded_by": {
+            "type": "string",
+            "enum": ["initial_free", "x402"]
+          }
+        }
+      },
+      "FailureInfo": {
+        "type": "object",
+        "description": "Why the chain ended without a redeemable result. Present when status is failed.",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": ["human_timeout", "entry_not_settled", "processing_failed"],
+            "description": "human_timeout: no human answered within 60 minutes. entry_not_settled: the gate 1 settlement never arrived."
+          },
+          "entry_credit_granted": {
+            "type": "boolean",
+            "description": "True when the wallet received a 0.10 USDC entry credit for the next chain. Granted when gate 1 was actually paid with x402. When gate 1 was funded by an entitlement, that entitlement is returned to the wallet instead, so a free chain is not lost."
+          },
+          "entry_credit_value_usdc": {
+            "type": "string",
+            "examples": ["0.10", "0.00"]
+          }
+        }
+      },
+      "VerifyState": {
+        "type": "object",
+        "description": "The state of one chain. verdict, explanation, and response stay null until gate 2 has been passed.",
+        "properties": {
+          "verify_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The durable handle for this chain. Persist it."
+          },
+          "status": {
+            "type": "string",
+            "enum": ["processing", "ready", "failed", "completed"],
+            "description": "processing: admission is settling or a human is working. ready: a human answered but the result is locked. failed: stop. completed: the answer is available."
+          },
+          "human_status": {
+            "type": ["string", "null"],
+            "enum": ["accepted", "rejected", "refined", null],
+            "description": "The raw human action. Null until completed."
+          },
+          "verdict": {
+            "type": ["string", "null"],
+            "enum": ["true", "false", "refined", null],
+            "description": "The parseable verdict. true: the claim holds. false: it does not. refined: the human supplied a better version in explanation. Null until completed."
+          },
+          "explanation": {
+            "type": ["string", "null"],
+            "description": "The human's free text when the verdict is refined. Null until completed."
+          },
+          "response": {
+            "type": ["string", "null"],
+            "description": "The raw human response text. Null until completed."
+          },
+          "response_time_ms": {
+            "type": ["integer", "null"],
+            "description": "How long the human took. Null until completed."
+          },
+          "wallet_address": {
+            "type": ["string", "null"],
+            "description": "The requester wallet that owns this chain."
+          },
+          "funding": {
+            "$ref": "#/components/schemas/Funding"
+          },
+          "created_at": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "admitted_at": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "When gate 1 passed and the chain entered the human queue."
+          },
+          "expires_at": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "Unanswered human work expires 60 minutes after creation."
+          },
+          "responded_at": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "unlocked_at": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "When gate 2 passed."
+          },
+          "next_action": {
+            "type": "string",
+            "enum": ["poll", "unlock", "stop", "done"],
+            "description": "What the agent should do next. Follow this instead of inferring from status."
+          },
+          "poll_url": {
+            "type": "string",
+            "description": "Present when next_action is poll."
+          },
+          "retry_after_seconds": {
+            "type": "integer",
+            "description": "Present when next_action is poll. Honor it.",
+            "examples": [15]
+          },
+          "unlock": {
+            "$ref": "#/components/schemas/UnlockAction"
+          },
+          "failure": {
+            "$ref": "#/components/schemas/FailureInfo"
+          }
+        }
+      },
+      "VerifyAccepted": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/VerifyState"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "response_timeout_ms": {
+                "type": "integer",
+                "description": "How long the human has to answer before the chain expires.",
+                "examples": [3600000]
+              },
+              "message": {
+                "type": "string",
+                "examples": ["Admission accepted. Poll until status is ready or failed."]
+              }
+            }
+          }
+        ]
+      },
+      "PaymentRequired": {
+        "type": "object",
+        "description": "x402 version 2 payment requirements. Also delivered base64 encoded in the PAYMENT-REQUIRED header. See https://docs.x402.org for the canonical schema.",
+        "properties": {
+          "x402Version": {
+            "type": "integer",
+            "examples": [2]
+          },
+          "accepts": {
+            "type": "array",
+            "description": "The payment options the server accepts. Pick one, sign it, and retry the same request.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "scheme": {
+                  "type": "string",
+                  "examples": ["exact"]
+                },
+                "network": {
+                  "type": "string",
+                  "description": "CAIP-2 chain id. Verifi settles on Base mainnet.",
+                  "examples": ["eip155:8453"]
+                },
+                "resource": {
+                  "type": "string",
+                  "description": "The resource being paid for."
+                },
+                "description": {
+                  "type": "string"
+                },
+                "mimeType": {
+                  "type": "string"
+                },
+                "payTo": {
+                  "type": "string",
+                  "description": "The receiving address. Funds move from the buyer wallet straight to it."
+                },
+                "asset": {
+                  "type": "string",
+                  "description": "The token contract. USDC on Base is 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913.",
+                  "examples": ["0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"]
+                },
+                "maxAmountRequired": {
+                  "type": "string",
+                  "description": "Amount in the token's smallest unit. USDC has 6 decimals, so 0.10 USDC is 100000.",
+                  "examples": ["100000", "2900000"]
+                }
+              },
+              "additionalProperties": true
+            }
+          },
+          "error": {
+            "type": "string",
+            "description": "Human readable reason the request was not fulfilled."
+          },
+          "paymentRequiredHeader": {
+            "type": "string",
+            "description": "The raw base64 requirement, echoed for clients that prefer the encoded form."
+          }
+        },
+        "additionalProperties": true
+      },
+      "PaymentResponse": {
+        "type": "object",
+        "description": "x402 settlement receipt, delivered base64 encoded in the PAYMENT-RESPONSE header after a paid gate succeeds.",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "transaction": {
+            "type": "string",
+            "description": "The on-chain transaction hash for this gate. Entry and unlock have separate hashes tied to the same verify_id."
+          },
+          "network": {
+            "type": "string",
+            "examples": ["eip155:8453"]
+          },
+          "payer": {
+            "type": "string",
+            "description": "The wallet that paid."
+          }
+        },
+        "additionalProperties": true
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "What went wrong."
+          },
+          "detail": {
+            "type": "string",
+            "description": "What to do about it, when there is a useful next step."
+          },
+          "status": {
+            "type": "string",
+            "description": "The chain status, on lifecycle conflicts."
+          }
+        }
+      }
+    }
+  }
+}

@@ -9,4 +9,6 @@ Disallow: /verify
 # 1. Every /verify request interrupts a real human. Do not spam.
 # 2. One pending verify per agent_id; unanswered verifies expire in 60 minutes.
 # 3. Machine-readable service description: https://verifi.cloud/llms.txt
-# 4. API documentation: https://verifi.cloud/docs/
+# 4. Full reference for LLMs: https://verifi.cloud/llms-full.txt
+# 5. OpenAPI 3.1 spec: https://verifi.cloud/openapi.json
+# 6. API documentation: https://verifi.cloud/docs/

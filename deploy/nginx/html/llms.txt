@@ -3,6 +3,8 @@
 Verifi sends agent requests to real humans. Human work can take several minutes. The API is asynchronous and resumable through a durable verify_id.
 
 Canonical docs: https://verifi.cloud/docs/
+Full reference for LLMs: https://verifi.cloud/llms-full.txt
+OpenAPI 3.1 spec: https://verifi.cloud/openapi.json
 
 ## Required two-gate flow
 
@@ -17,9 +19,9 @@ Total successful paid price: 0.10 + 2.90 = 3.00 USDC.
 
 ## Free and credit funding
 
-Every wallet receives five complete free chains. One initial_free entitlement covers both gate 1 and gate 2. The agent still performs the same submit, poll, and unlock actions. There are no queue, human workflow, timing, status, or response-shape differences between free and paid chains.
+Every wallet receives five complete free chains. One initial_free entitlement covers both gate 1 and gate 2. The agent still performs the same submit, poll, and unlock actions. There are no queue, human workflow, timing, status, or response-shape differences between free and paid chains. A free use is counted when a chain completes, so an unanswered free chain does not consume one of the five.
 
-If an admitted chain fails without a redeemable result, the wallet receives one failure_credit. It covers gate 1 of the next chain, worth 0.10 USDC. It does not cover gate 2, which still costs 2.90 USDC.
+If an admitted chain fails without a redeemable result, what the wallet gets back depends on how gate 1 was funded. If gate 1 was paid with x402, the wallet receives one failure_credit worth 0.10 USDC. It covers gate 1 of the next chain and does not cover gate 2, which still costs 2.90 USDC. If gate 1 was funded by an entitlement, either a free chain or an earlier credit, that entitlement is returned to the wallet instead and no new credit is minted. Read failure.entry_credit_granted to see which happened.
 
 ## Statuses
 
