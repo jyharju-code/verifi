@@ -279,11 +279,74 @@ async def _reconcile_settlements_once() -> int:
     return done
 
 
+async def _verify_settlements_onchain_once() -> int:
+    """Confirm applied settlements against Base itself.
+
+    The payment gate is the x402 middleware and the facilitator. This runs
+    afterwards and independently, so a transaction hash that was never mined
+    cannot sit in the ledger unnoticed. It never blocks a payment: an
+    unreachable RPC just leaves the row unchecked for the next pass.
+    """
+    db = await get_pool()
+    rows = await db.fetch(
+        """
+        SELECT id, verify_id, kind, transaction
+        FROM settlement_journal
+        WHERE applied = true AND chain_verified IS NULL
+        ORDER BY created_at
+        LIMIT 10
+        """
+    )
+    checked = 0
+    for r in rows:
+        verified, detail = await wallets.verify_transaction_onchain(r["transaction"])
+        if verified is None:
+            continue  # transient: leave it for the next pass
+        await db.execute(
+            """
+            UPDATE settlement_journal
+            SET chain_verified = $2, chain_checked_at = now(), chain_detail = $3
+            WHERE id = $1
+            """,
+            r["id"], verified, detail,
+        )
+        checked += 1
+        if verified:
+            continue
+        # A recorded settlement the chain has never seen. Either the ledger was
+        # written by something other than a real payment, or the hash is wrong.
+        log.error(
+            "settlement not on chain verify=%s kind=%s tx=%s: %s",
+            r["verify_id"], r["kind"], r["transaction"], detail,
+        )
+        await audit(
+            "core-api",
+            "settlement_not_on_chain",
+            {
+                "verify_id": str(r["verify_id"]),
+                "kind": r["kind"],
+                "transaction": r["transaction"],
+                "detail": detail,
+            },
+        )
+        if config.ADMIN_TELEGRAM_ID:
+            await notify.send_message(
+                config.ADMIN_TELEGRAM_ID,
+                "🚨 Kirjattua maksua ei löydy ketjulta.\n\n"
+                f"Verify: {r['verify_id']}\nPortti: {r['kind']}\n"
+                f"Tx: {r['transaction']}\nSyy: {detail}\n\n"
+                "Tarkista facilitatorin lokit. Tama voi tarkoittaa etta "
+                "maksukirjaus syntyi ilman oikeaa settlementtia.",
+            )
+    return checked
+
+
 async def _reconcile_settlements_loop() -> None:
     while True:
         await asyncio.sleep(30)
         try:
             await _reconcile_settlements_once()
+            await _verify_settlements_onchain_once()
         except Exception:
             log.exception("settlement reconcile loop failed")
 
