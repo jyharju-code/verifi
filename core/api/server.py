@@ -20,7 +20,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from core import config, notify
+from core import config, notify, wallets
 from core.audit import audit
 from core.db.database import close_pool, get_pool
 from core.routing import pool as routing_pool
@@ -288,18 +288,80 @@ async def _reconcile_settlements_loop() -> None:
             log.exception("settlement reconcile loop failed")
 
 
+async def _gas_watch_once() -> str:
+    """Alert the operator before the gas till stops settling payments.
+
+    An empty gas wallet silently breaks every paid gate, so this is a money
+    outage, not a cosmetic warning. The alert is throttled by reading the last
+    alert out of audit_log, so it survives a restart and never spams.
+    """
+    status = await wallets.wallet_status()
+    gas = status["gas_wallet"]
+    if gas["state"] != "low":
+        return gas["state"]
+    db = await get_pool()
+    last = await db.fetchval(
+        """
+        SELECT at FROM audit_log
+        WHERE event = 'gas_wallet_low'
+        ORDER BY at DESC LIMIT 1
+        """
+    )
+    if last is not None:
+        age = await db.fetchval("SELECT EXTRACT(EPOCH FROM (now() - $1))", last)
+        if age is not None and float(age) < wallets.GAS_ALERT_INTERVAL_S:
+            return "low_muted"
+    await audit(
+        "core-api",
+        "gas_wallet_low",
+        {
+            "address": gas["address"],
+            "eth": gas["eth"],
+            "threshold_eth": gas["low_threshold_eth"],
+        },
+    )
+    log.error("gas wallet is low: %s ETH", gas["eth"])
+    if config.ADMIN_TELEGRAM_ID:
+        await notify.send_message(
+            config.ADMIN_TELEGRAM_ID,
+            "⛽ Kaasulompakko on vähissä.\n\n"
+            f"Saldo: {gas['eth']} ETH (raja {gas['low_threshold_eth']}).\n"
+            f"Osoite: {gas['address']}\n\n"
+            "Kun kaasu loppuu, x402-maksut eivät settlaannu eikä tuloja tule. "
+            "Lisää pieni summa ETH:tä Basella.",
+        )
+    return "low_alerted"
+
+
+async def _gas_watch_loop() -> None:
+    while True:
+        try:
+            await _gas_watch_once()
+        except Exception:
+            log.exception("gas watch failed")
+        await asyncio.sleep(900)
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     from core.webhooks import delivery_loop
+
+    # A private key in this process would mean the deployment leaked one into
+    # the wrong container. Refuse to start rather than run with it.
+    wallets.assert_no_private_keys()
+    for problem in wallets.validate_addresses():
+        log.warning("wallet configuration: %s", problem)
 
     await get_pool()
     task = asyncio.create_task(_expire_stale_loop())
     webhook_task = asyncio.create_task(delivery_loop())
     reconcile_task = asyncio.create_task(_reconcile_settlements_loop())
+    gas_task = asyncio.create_task(_gas_watch_loop())
     yield
     task.cancel()
     webhook_task.cancel()
     reconcile_task.cancel()
+    gas_task.cancel()
     await close_pool()
 
 
