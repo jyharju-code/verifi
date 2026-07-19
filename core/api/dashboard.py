@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
-from core import config
+from core import config, wallets
 from core.audit import audit
 from core.db.database import get_pool
 
@@ -253,6 +253,19 @@ async def admin_data(request: Request) -> JSONResponse:
     ))
 
 
+@router.get("/admin/wallets")
+async def admin_wallets(request: Request) -> JSONResponse:
+    """Live balances for the two public money addresses.
+
+    Public addresses only. This endpoint has no access to any private key and
+    returns none: the gas wallet key exists solely in the facilitator
+    container, and the receiving wallet has no key in the system at all.
+    """
+    if not _check_auth(request):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    return _harden(JSONResponse(await wallets.wallet_status()))
+
+
 class PricingIn(BaseModel):
     price: float
     commission: float
@@ -427,6 +440,14 @@ DASHBOARD_HTML = """<!doctype html>
 <div id="error">Tietojen haku epäonnistui. Yritetään uudelleen...</div>
 
 <div class="tiles" id="tiles"></div>
+
+<h2>Lompakot ja kaasu</h2>
+<div class="card" style="overflow-x:auto">
+  <table id="walletTable"><thead><tr>
+    <th>Lompakko</th><th>Osoite</th><th class="num">Saldo</th><th>Tila</th><th>Tehtävä</th>
+  </tr></thead><tbody></tbody></table>
+  <div id="walletNote" class="muted" style="font-size:11px;margin-top:6px"></div>
+</div>
 
 <h2>Verifyt päivittäin, viimeiset 14 päivää</h2>
 <div class="card">
@@ -669,8 +690,54 @@ function renderInstances(instances) {
   });
 }
 
+const WSTATE = {
+  ok:      { fi: "kunnossa",  color: "var(--good)",     icon: "\\u2705" },
+  warning: { fi: "vähenee",   color: "var(--warning)",  icon: "\\u26A0" },
+  low:     { fi: "vähissä",   color: "var(--critical)", icon: "\\u26A0" },
+  unknown: { fi: "ei tietoa", color: "var(--muted)",    icon: "" },
+};
+
+async function refreshWallets() {
+  let w;
+  try {
+    const resp = await fetch("/admin/wallets", { credentials: "same-origin" });
+    if (!resp.ok) throw new Error(resp.status);
+    w = await resp.json();
+  } catch (e) {
+    return;
+  }
+  const fmt = (v, unit) => v == null ? "ei tietoa" : v.toFixed(unit === "ETH" ? 5 : 2) + " " + unit;
+  const rows = [["gas_wallet", "ETH"], ["receiving_wallet", "USDC"]].map(([key, unit]) => {
+    const x = w[key];
+    const st = WSTATE[x.state] || WSTATE.unknown;
+    const bal = unit === "ETH" ? x.eth : x.usdc;
+    const addr = x.address
+      ? `<a href="${esc(x.explorer)}" target="_blank" rel="noopener noreferrer" title="${esc(x.address)}">` +
+        `${esc(x.address.slice(0, 10))}...${esc(x.address.slice(-6))}</a>`
+      : `<span class="muted">ei asetettu</span>`;
+    return `<tr><td>${esc(x.label)}</td><td>${addr}</td>` +
+      `<td class="num">${fmt(bal, unit)}</td>` +
+      `<td><span class="status"><span class="dot" style="background:${st.color}"></span>` +
+      `${st.icon} ${st.fi}</span></td>` +
+      `<td class="muted" style="font-size:11px">${esc(x.purpose)}</td></tr>`;
+  });
+  document.querySelector("#walletTable tbody").innerHTML = rows.join("");
+  const note = document.getElementById("walletNote");
+  if (w.problems && w.problems.length) {
+    note.textContent = "Huomiot: " + w.problems.join(". ");
+    note.style.color = "var(--critical)";
+  } else {
+    note.textContent = w.network +
+      ". Kaasu maksaa settlementit, tulot laskeutuvat vastaanottavaan osoitteeseen. " +
+      "Yksityisiä avaimia ei ole tässä palvelussa eikä tässä näkymässä.";
+    note.style.color = "";
+  }
+}
+
 refresh();
+refreshWallets();
 setInterval(refresh, 10000);
+setInterval(refreshWallets, 60000);
 </script>
 </body>
 </html>

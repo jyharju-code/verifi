@@ -80,6 +80,13 @@ services:
       MAX_PENDING_TOTAL: ${MAX_PENDING_TOTAL:-25}
       FREE_DAILY_MAX: ${FREE_DAILY_MAX:-0}
       CORE_INTERNAL_SECRET: ${CORE_INTERNAL_SECRET:-}
+      # Public addresses only, for balance monitoring and the dashboard.
+      # Never pass FACILITATOR_PRIVATE_KEY here: core-api refuses to start
+      # if a private key is present in its environment.
+      X402_PAY_TO: ${X402_PAY_TO:-}
+      FACILITATOR_ADDRESS: ${FACILITATOR_ADDRESS:-}
+      BASE_RPC_URL: ${BASE_RPC_URL:-https://mainnet.base.org}
+      GAS_LOW_ETH: ${GAS_LOW_ETH:-0.002}
     command: ["sh", "-c", "python -m core.db.migrate && exec uvicorn core.api.server:app --host 0.0.0.0 --port 8700 --no-access-log"]
 
   bot:
