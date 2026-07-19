@@ -109,6 +109,47 @@ async def _usdc_balance(client: httpx.AsyncClient, address: str) -> float | None
     return _from_hex(result, USDC_DECIMALS)
 
 
+TX_HASH = re.compile(r"^0x[0-9a-fA-F]{64}$")
+
+
+async def verify_transaction_onchain(tx_hash: str) -> tuple[bool | None, str]:
+    """Confirm a settlement hash really exists and was mined on Base.
+
+    Returns (verified, detail). verified is True when the transaction is mined,
+    False when the chain does not know it, and None when the answer could not
+    be obtained. None is not a failure: it means try again later.
+
+    This is deliberately a check after the fact, never a gate. The x402
+    middleware and the facilitator are what enforce payment; this exists so a
+    hash that was never mined cannot sit in the ledger unnoticed.
+    """
+    if not TX_HASH.match(tx_hash or ""):
+        return False, "not a transaction hash"
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            resp = await client.post(
+                BASE_RPC_URL,
+                json={
+                    "jsonrpc": "2.0", "id": 1,
+                    "method": "eth_getTransactionByHash", "params": [tx_hash],
+                },
+            )
+            body = resp.json()
+        except (httpx.HTTPError, ValueError):
+            return None, "rpc unreachable"
+    if "error" in body:
+        return None, "rpc error"
+    tx = body.get("result")
+    if tx is None:
+        return False, "unknown to the chain"
+    if not tx.get("blockNumber"):
+        return None, "pending, not mined yet"
+    to = (tx.get("to") or "").lower()
+    if to != USDC_CONTRACT.lower():
+        return True, f"mined, but sent to {to} rather than the USDC contract"
+    return True, "mined, USDC contract"
+
+
 async def wallet_status() -> dict:
     """Balances and health for the two public addresses.
 
