@@ -12,11 +12,12 @@ request() {
     local body_file="$smoke_dir/${name}.body"
     local status
     status=$(curl --silent --show-error --location --output "$body_file" --write-out '%{http_code}' "$@")
-    if [ "$status" != "$expected" ]; then
+    if ! echo "$status" | grep -qE "^(${expected})$"; then
         echo "$name returned HTTP $status, expected $expected" >&2
         sed -n '1,40p' "$body_file" >&2
         exit 1
     fi
+    echo "$status" > "$smoke_dir/${name}.status"
 }
 
 require_text() {
@@ -40,12 +41,18 @@ require_text docs "2.90 USDC"
 request health 200 "$base_url/verify-api/health"
 require_text health '"ok":true'
 
-request invalid_verify 400 \
+# An invalid agent_id must never enter the human queue. The exact refusal
+# depends on configuration: 402 when the x402 gate answers first (the gate
+# order that discovery crawlers require), 400 from the handler when payments
+# are off, 503 when paid admission is not configured at all.
+request invalid_verify '400|402|503' \
     --request POST \
     --header 'Content-Type: application/json' \
     --data '{"intent":"smoke","claim":"must not enter the queue","agent_id":"invalid"}' \
     "$base_url/verify"
-require_text invalid_verify "agent_id"
+if [ "$(cat "$smoke_dir/invalid_verify.status")" = "400" ]; then
+    require_text invalid_verify "agent_id"
+fi
 
 request invalid_contact 422 \
     --request POST \
