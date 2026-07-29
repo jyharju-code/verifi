@@ -18,6 +18,9 @@ import {
   publicView,
   agentStatus,
   recordSettlementOnFinish,
+  admissionRoute,
+  isWallet,
+  WALLET_ADDRESS_ERROR,
 } from './routes/verify.js';
 
 const PORT = Number(process.env.PORT ?? 8702);
@@ -28,7 +31,6 @@ const X402_UNLOCK_PRICE = process.env.X402_UNLOCK_PRICE ?? '$2.90';
 const X402_NETWORK = process.env.X402_NETWORK ?? 'eip155:8453';
 const FACILITATOR_URL = process.env.FACILITATOR_URL ?? 'https://x402.org/facilitator';
 
-const WALLET_RE = /^0x[0-9a-fA-F]{40}$/;
 const UUID_RE = /^[0-9a-f-]{36}$/i;
 
 const app = express();
@@ -37,41 +39,36 @@ app.use(express.json({ limit: '32kb' }));
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
-// Admission preflight is before both the entitlement path and x402. This
-// prevents a payment if the wallet already has an active chain or the human
-// capacity is full. The core repeats these checks transactionally.
+// Admission preflight decides which gate a request goes through. It answers
+// only what it can answer from the wallet's own quota, and everything else
+// falls through to x402 so that an unpaid request always ends at a real 402
+// with the payment requirements. Nothing here can charge the caller: x402
+// cancels settlement for any 4xx or 5xx produced after the gate, so the checks
+// that run later are just as free as the ones that run before it.
 app.post('/verify', async (req, res, next) => {
   try {
     const agentId = req.body?.agent_id;
-    if (typeof agentId !== 'string' || !WALLET_RE.test(agentId)) {
-      return res.status(400).json({
-        error: 'agent_id must be the requester wallet address (0x + 40 hex characters)',
-      });
-    }
+    // A request that does not name a wallet cannot be measured against a
+    // quota, so it goes straight to the payment gate. handleVerify rejects the
+    // malformed agent_id after payment is verified but before it settles.
+    if (!isWallet(agentId)) return next('route');
+
     const quota = await quotaFor(agentId);
-    if (quota.pending_count > 0) {
-      return res.status(429).json({
-        error: 'one active verify per agent_id',
-        detail: 'Poll the previous verify until it is completed or failed.',
-      });
-    }
-    if (quota.queue_full) {
-      res.set('Retry-After', '120');
-      return res.status(503).json({
-        error: 'human queue is full',
-        detail: 'Retry in a couple of minutes. No payment was taken.',
-      });
-    }
     // Prefer the free/credit path only when an entitlement can actually be
     // consumed. When the platform's daily free budget is spent, a wallet with
     // free allowance left falls through to x402 so it can still pay to proceed.
-    const canUseEntitlement = quota.entitlement_admission_available
-      ?? quota.has_entry_entitlement;
-    if (canUseEntitlement) {
-      req.admissionMode = 'entitlement';
-      return await handleVerify(req, res);
+    switch (admissionRoute(quota)) {
+      case 'active-chain':
+        return res.status(429).json({
+          error: 'one active verify per agent_id',
+          detail: 'Poll the previous verify until it is completed or failed.',
+        });
+      case 'entitlement':
+        req.admissionMode = 'entitlement';
+        return await handleVerify(req, res);
+      default:
+        return next('route');
     }
-    return next('route');
   } catch (err) {
     console.error('admission preflight failed:', err.message);
     return res.status(502).json({ error: 'verification backend unavailable' });
@@ -169,7 +166,12 @@ if (X402_PAY_TO) {
     `${X402_NETWORK} via ${FACILITATOR_URL}`,
   );
 } else {
-  app.post('/verify', (_req, res) => {
+  // Without a payment gate there is nothing left to fall through to, so this
+  // route answers the rejections handleVerify would otherwise have made.
+  app.post('/verify', (req, res) => {
+    if (!isWallet(req.body?.agent_id)) {
+      return res.status(400).json({ error: WALLET_ADDRESS_ERROR });
+    }
     res.status(503).json({ error: 'paid admission is not configured and no entitlement remains' });
   });
   app.post('/verify-unlock', (_req, res) => {

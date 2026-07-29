@@ -372,7 +372,7 @@ const verify = await response.json();</code></pre>
           <tr><td><code>429</code></td><td>The wallet already has an active review</td></tr>
           <tr><td><code>503</code></td><td>The human queue is full or paid routes are unavailable</td></tr>
         </table>
-        <p>Capacity and active-request checks happen before payment. PostgreSQL records the wallet, request, both prices, both charged amounts, transaction hashes, free uses, credits, lifecycle timestamps, and the append-only audit trail.</p>
+        <p>A refused request is never charged. The active-request check runs before payment. Capacity and request validation run after it, because x402 cancels settlement for any <code>4xx</code> or <code>5xx</code> answer, so an unpaid caller always sees a real <code>402</code> first. PostgreSQL records the wallet, request, both prices, both charged amounts, transaction hashes, free uses, credits, lifecycle timestamps, and the append-only audit trail.</p>
       </section>
     </article>
   </div>

@@ -29,7 +29,7 @@ The first five complete chains per wallet are free at both gates. Free and paid 
 | Every chain after that | 0.10 | 2.90 | 3.00 |
 | Chain funded by a failure credit | 0.00 | 2.90 | 2.90 |
 
-Amounts are USDC on Base mainnet. Polling never costs money. A 429 or 503 admission answer is never charged, because capacity is checked before gate 1 payment.
+Amounts are USDC on Base mainnet. Polling never costs money. A 429 or 503 admission answer is never charged, because x402 cancels settlement for any 4xx or 5xx response: the signed authorization is never submitted to the facilitator.
 
 ## Funding and credits
 
@@ -315,7 +315,7 @@ Gate 1 and gate 2 need separate signatures tied to the same verify_id. Never sen
 - intent: 1 to 2000 characters. claim: 1 to 4000 characters. Request body limit 32 kB.
 - agent_id must match ^0x[0-9a-fA-F]{40}$.
 - GET polling never costs money and never reveals a locked result.
-- Queue capacity is checked before gate 1 payment. A full queue answers 503 with Retry-After and charges nothing.
+- Queue capacity is enforced after the gate 1 payment gate. A full queue still answers 402 to an unpaid caller, then 503 with Retry-After once the gate is passed, and charges nothing because that 503 cancels settlement.
 - A real human reads every request. Do not spam.
 
 ## Error codes
