@@ -6,7 +6,7 @@
  * five chains per wallet use a full-free entitlement at both gates.
  */
 import express from 'express';
-import { paymentMiddleware, x402ResourceServer } from '@x402/express';
+import { paymentMiddleware, x402ResourceServer, RouteConfigurationError } from '@x402/express';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { HTTPFacilitatorClient } from '@x402/core/server';
 import {
@@ -32,6 +32,16 @@ const X402_NETWORK = process.env.X402_NETWORK ?? 'eip155:8453';
 const FACILITATOR_URL = process.env.FACILITATOR_URL ?? 'https://x402.org/facilitator';
 
 const UUID_RE = /^[0-9a-f-]{36}$/i;
+
+// x402 validates its routes against the facilitator in a promise created when
+// the middleware is built, not when a request arrives. A facilitator that
+// rejects the configured network, or that is simply unreachable at boot,
+// therefore rejects a promise nothing is awaiting yet, and node kills the
+// process for it. Free chains do not depend on the facilitator at all, so log
+// loudly and keep serving instead of crash looping.
+process.on('unhandledRejection', (reason) => {
+  console.error('unhandled rejection, still serving:', reason?.message ?? reason);
+});
 
 const app = express();
 app.set('trust proxy', 1);
@@ -109,10 +119,40 @@ app.post('/verify-unlock', async (req, res, next) => {
   return res.json(publicView(unlocked.body));
 });
 
+let checkFacilitatorSupport = async () => {};
+
 if (X402_PAY_TO) {
   const facilitatorClient = new HTTPFacilitatorClient({ url: FACILITATOR_URL });
   const resourceServer = new x402ResourceServer(facilitatorClient)
     .register(X402_NETWORK, new ExactEvmScheme());
+
+  // The facilitator decides which scheme and network it actually serves. x402
+  // validates the routes against that list on the first paid request and
+  // throws, so a mainnet price behind a testnet-only facilitator breaks both
+  // gates at runtime with nothing in the logs to explain it. Ask at startup
+  // instead. Nothing is cached: this only reports, the middleware still
+  // decides per request.
+  checkFacilitatorSupport = async () => {
+    try {
+      const { kinds = [] } = (await facilitatorClient.getSupported()) ?? {};
+      if (kinds.some((k) => k.scheme === 'exact' && k.network === X402_NETWORK)) {
+        console.log(`facilitator serves exact on ${X402_NETWORK}`);
+        return;
+      }
+      const offered = kinds
+        .filter((k) => k.scheme === 'exact')
+        .map((k) => k.network)
+        .join(', ');
+      console.error(
+        `FACILITATOR MISMATCH: ${FACILITATOR_URL} does not serve scheme exact on ` +
+        `${X402_NETWORK}, so both paid gates refuse every request until ` +
+        `FACILITATOR_URL or X402_NETWORK changes. Free chains are unaffected. ` +
+        `Networks offered for exact: ${offered || 'none'}.`,
+      );
+    } catch (err) {
+      console.error(`facilitator ${FACILITATOR_URL} did not answer /supported: ${err.message}`);
+    }
+  };
 
   app.post(
     '/verify',
@@ -186,6 +226,26 @@ app.post('/verify/:id/unlock', (req, res) => {
 
 app.use('/', verifyRouter);
 
+// Every answer this API gives an agent is JSON. Without this handler express
+// renders its default HTML page with a stack trace, which is what a route
+// rejected by the facilitator produced: a public 500 carrying internal paths
+// instead of a machine-readable error. Nothing here can have charged the
+// caller, because x402 settles only after a route returns below 400.
+app.use((err, _req, res, _next) => {
+  const misconfigured = err instanceof RouteConfigurationError;
+  console.error(misconfigured ? 'x402 routes rejected:' : 'unhandled error:', err.message);
+  if (res.headersSent) return res.end();
+  if (misconfigured) {
+    res.set('Retry-After', '120');
+    return res.status(503).json({
+      error: 'paid gates are unavailable',
+      detail: 'The configured facilitator does not serve this network. No payment was taken.',
+    });
+  }
+  return res.status(500).json({ error: 'internal error' });
+});
+
 app.listen(PORT, HOST, () => {
   console.log(`verify-api listening on ${HOST}:${PORT}`);
+  void checkFacilitatorSupport();
 });
