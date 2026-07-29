@@ -6,7 +6,7 @@
  * five chains per wallet use a full-free entitlement at both gates.
  */
 import express from 'express';
-import { paymentMiddleware, x402ResourceServer } from '@x402/express';
+import { paymentMiddleware, x402ResourceServer, RouteConfigurationError } from '@x402/express';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { HTTPFacilitatorClient } from '@x402/core/server';
 import {
@@ -18,6 +18,9 @@ import {
   publicView,
   agentStatus,
   recordSettlementOnFinish,
+  admissionRoute,
+  isWallet,
+  WALLET_ADDRESS_ERROR,
 } from './routes/verify.js';
 
 const PORT = Number(process.env.PORT ?? 8702);
@@ -28,8 +31,17 @@ const X402_UNLOCK_PRICE = process.env.X402_UNLOCK_PRICE ?? '$2.90';
 const X402_NETWORK = process.env.X402_NETWORK ?? 'eip155:8453';
 const FACILITATOR_URL = process.env.FACILITATOR_URL ?? 'https://x402.org/facilitator';
 
-const WALLET_RE = /^0x[0-9a-fA-F]{40}$/;
 const UUID_RE = /^[0-9a-f-]{36}$/i;
+
+// x402 validates its routes against the facilitator in a promise created when
+// the middleware is built, not when a request arrives. A facilitator that
+// rejects the configured network, or that is simply unreachable at boot,
+// therefore rejects a promise nothing is awaiting yet, and node kills the
+// process for it. Free chains do not depend on the facilitator at all, so log
+// loudly and keep serving instead of crash looping.
+process.on('unhandledRejection', (reason) => {
+  console.error('unhandled rejection, still serving:', reason?.message ?? reason);
+});
 
 const app = express();
 app.set('trust proxy', 1);
@@ -37,41 +49,36 @@ app.use(express.json({ limit: '32kb' }));
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
-// Admission preflight is before both the entitlement path and x402. This
-// prevents a payment if the wallet already has an active chain or the human
-// capacity is full. The core repeats these checks transactionally.
+// Admission preflight decides which gate a request goes through. It answers
+// only what it can answer from the wallet's own quota, and everything else
+// falls through to x402 so that an unpaid request always ends at a real 402
+// with the payment requirements. Nothing here can charge the caller: x402
+// cancels settlement for any 4xx or 5xx produced after the gate, so the checks
+// that run later are just as free as the ones that run before it.
 app.post('/verify', async (req, res, next) => {
   try {
     const agentId = req.body?.agent_id;
-    if (typeof agentId !== 'string' || !WALLET_RE.test(agentId)) {
-      return res.status(400).json({
-        error: 'agent_id must be the requester wallet address (0x + 40 hex characters)',
-      });
-    }
+    // A request that does not name a wallet cannot be measured against a
+    // quota, so it goes straight to the payment gate. handleVerify rejects the
+    // malformed agent_id after payment is verified but before it settles.
+    if (!isWallet(agentId)) return next('route');
+
     const quota = await quotaFor(agentId);
-    if (quota.pending_count > 0) {
-      return res.status(429).json({
-        error: 'one active verify per agent_id',
-        detail: 'Poll the previous verify until it is completed or failed.',
-      });
-    }
-    if (quota.queue_full) {
-      res.set('Retry-After', '120');
-      return res.status(503).json({
-        error: 'human queue is full',
-        detail: 'Retry in a couple of minutes. No payment was taken.',
-      });
-    }
     // Prefer the free/credit path only when an entitlement can actually be
     // consumed. When the platform's daily free budget is spent, a wallet with
     // free allowance left falls through to x402 so it can still pay to proceed.
-    const canUseEntitlement = quota.entitlement_admission_available
-      ?? quota.has_entry_entitlement;
-    if (canUseEntitlement) {
-      req.admissionMode = 'entitlement';
-      return await handleVerify(req, res);
+    switch (admissionRoute(quota)) {
+      case 'active-chain':
+        return res.status(429).json({
+          error: 'one active verify per agent_id',
+          detail: 'Poll the previous verify until it is completed or failed.',
+        });
+      case 'entitlement':
+        req.admissionMode = 'entitlement';
+        return await handleVerify(req, res);
+      default:
+        return next('route');
     }
-    return next('route');
   } catch (err) {
     console.error('admission preflight failed:', err.message);
     return res.status(502).json({ error: 'verification backend unavailable' });
@@ -112,10 +119,40 @@ app.post('/verify-unlock', async (req, res, next) => {
   return res.json(publicView(unlocked.body));
 });
 
+let checkFacilitatorSupport = async () => {};
+
 if (X402_PAY_TO) {
   const facilitatorClient = new HTTPFacilitatorClient({ url: FACILITATOR_URL });
   const resourceServer = new x402ResourceServer(facilitatorClient)
     .register(X402_NETWORK, new ExactEvmScheme());
+
+  // The facilitator decides which scheme and network it actually serves. x402
+  // validates the routes against that list on the first paid request and
+  // throws, so a mainnet price behind a testnet-only facilitator breaks both
+  // gates at runtime with nothing in the logs to explain it. Ask at startup
+  // instead. Nothing is cached: this only reports, the middleware still
+  // decides per request.
+  checkFacilitatorSupport = async () => {
+    try {
+      const { kinds = [] } = (await facilitatorClient.getSupported()) ?? {};
+      if (kinds.some((k) => k.scheme === 'exact' && k.network === X402_NETWORK)) {
+        console.log(`facilitator serves exact on ${X402_NETWORK}`);
+        return;
+      }
+      const offered = kinds
+        .filter((k) => k.scheme === 'exact')
+        .map((k) => k.network)
+        .join(', ');
+      console.error(
+        `FACILITATOR MISMATCH: ${FACILITATOR_URL} does not serve scheme exact on ` +
+        `${X402_NETWORK}, so both paid gates refuse every request until ` +
+        `FACILITATOR_URL or X402_NETWORK changes. Free chains are unaffected. ` +
+        `Networks offered for exact: ${offered || 'none'}.`,
+      );
+    } catch (err) {
+      console.error(`facilitator ${FACILITATOR_URL} did not answer /supported: ${err.message}`);
+    }
+  };
 
   app.post(
     '/verify',
@@ -169,7 +206,12 @@ if (X402_PAY_TO) {
     `${X402_NETWORK} via ${FACILITATOR_URL}`,
   );
 } else {
-  app.post('/verify', (_req, res) => {
+  // Without a payment gate there is nothing left to fall through to, so this
+  // route answers the rejections handleVerify would otherwise have made.
+  app.post('/verify', (req, res) => {
+    if (!isWallet(req.body?.agent_id)) {
+      return res.status(400).json({ error: WALLET_ADDRESS_ERROR });
+    }
     res.status(503).json({ error: 'paid admission is not configured and no entitlement remains' });
   });
   app.post('/verify-unlock', (_req, res) => {
@@ -184,6 +226,26 @@ app.post('/verify/:id/unlock', (req, res) => {
 
 app.use('/', verifyRouter);
 
+// Every answer this API gives an agent is JSON. Without this handler express
+// renders its default HTML page with a stack trace, which is what a route
+// rejected by the facilitator produced: a public 500 carrying internal paths
+// instead of a machine-readable error. Nothing here can have charged the
+// caller, because x402 settles only after a route returns below 400.
+app.use((err, _req, res, _next) => {
+  const misconfigured = err instanceof RouteConfigurationError;
+  console.error(misconfigured ? 'x402 routes rejected:' : 'unhandled error:', err.message);
+  if (res.headersSent) return res.end();
+  if (misconfigured) {
+    res.set('Retry-After', '120');
+    return res.status(503).json({
+      error: 'paid gates are unavailable',
+      detail: 'The configured facilitator does not serve this network. No payment was taken.',
+    });
+  }
+  return res.status(500).json({ error: 'internal error' });
+});
+
 app.listen(PORT, HOST, () => {
   console.log(`verify-api listening on ${HOST}:${PORT}`);
+  void checkFacilitatorSupport();
 });

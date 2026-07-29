@@ -20,6 +20,30 @@ const EXPIRE_MS = 60 * 60 * 1000;
 const RETRY_AFTER_S = 15;
 const RESOLVED = new Set(['accepted', 'rejected', 'refined']);
 
+export const WALLET_RE = /^0x[0-9a-fA-F]{40}$/;
+export const WALLET_ADDRESS_ERROR =
+  'agent_id must be the requester wallet address (0x + 40 hex characters)';
+
+export function isWallet(value) {
+  return typeof value === 'string' && WALLET_RE.test(value);
+}
+
+/**
+ * Decide what an identified wallet does before the x402 payment gate.
+ *
+ * Only checks that are cheaper than a payment challenge belong here. Queue
+ * capacity is deliberately not one of them: answering a full queue with 503
+ * before x402 means an unpaid caller never sees the 402 requirements, so
+ * x402-aware clients and discovery crawlers cannot tell that this resource is
+ * paid at all. Capacity is enforced by the core inside the admission
+ * transaction instead, which is the only place it can be enforced correctly.
+ */
+export function admissionRoute(quota) {
+  if (quota.pending_count > 0) return 'active-chain';
+  const entitled = quota.entitlement_admission_available ?? quota.has_entry_entitlement;
+  return entitled ? 'entitlement' : 'payment-gate';
+}
+
 export async function coreFetch(path, options = {}) {
   const headers = { 'content-type': 'application/json', ...(options.headers ?? {}) };
   if (CORE_INTERNAL_SECRET) headers['x-internal-secret'] = CORE_INTERNAL_SECRET;
@@ -169,8 +193,20 @@ export function recordSettlementOnFinish(res, kind, getVerifyId) {
   res.once('close', start);
 }
 
+/**
+ * Create one admission. Runs after the gate the caller had to pass, so it owns
+ * every rejection that the preflight cannot make cheaply.
+ *
+ * Request validation lives here rather than before the payment gate because
+ * x402 cancels settlement for any 4xx or 5xx this handler returns: the signed
+ * authorization is never submitted to the facilitator, so a rejected request
+ * still costs the caller nothing.
+ */
 export async function handleVerify(req, res) {
   const { intent, claim, agent_id: agentId, callback_url: callbackUrl } = req.body ?? {};
+  if (!isWallet(agentId)) {
+    return res.status(400).json({ error: WALLET_ADDRESS_ERROR });
+  }
   if (typeof intent !== 'string' || !intent.trim() || typeof claim !== 'string' || !claim.trim()) {
     return res.status(400).json({ error: 'intent and claim are required strings' });
   }
@@ -206,6 +242,10 @@ export async function handleVerify(req, res) {
       detail: 'Poll the previous verify until it is completed or failed.',
     });
   }
+  // The core refuses a full queue before it inserts the row and before it
+  // consumes an entitlement, so nothing is spent here. On the x402 path this
+  // 503 also cancels settlement, so the entry payment is never submitted and
+  // the caller keeps its 0.10 USDC. No credit or refund is needed.
   if (create.status === 503) {
     res.set('Retry-After', '120');
     return res.status(503).json({

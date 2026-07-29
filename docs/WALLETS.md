@@ -91,10 +91,67 @@ sequence. If admitted work fails without a redeemable result, the wallet gets
 one entry-only credit. It replaces the next 0.10 USDC payment but does not
 replace the later 2.90 USDC unlock payment.
 
+## Turning on mainnet settlement
+
+The postman has to serve the chain the prices are quoted in. The default
+`FACILITATOR_URL=https://x402.org/facilitator` is testnet only: it serves
+scheme `exact` on `eip155:84532` (Base Sepolia), never on the `eip155:8453`
+mainnet in `X402_NETWORK`. With that pair, both paid gates refuse every
+request and verify-api logs `FACILITATOR MISMATCH` at startup. Free chains
+keep working, because they never touch a facilitator.
+
+The fix is the self-hosted facilitator already defined in
+`deploy/docker-compose.yml` under the `payments` profile, which the `verifi`
+wrapper always includes. `deploy/facilitator-config.json` already declares
+scheme id `v2-eip155-exact` on `eip155:8453`, and that id is reported to
+verify-api as scheme `exact` at x402 version 2, which is exactly what the
+paid routes register.
+
+One command does the whole server side (refresh `/usr/local/bin/verifi` from
+`scripts/verifi-ops.sh` first if the installed wrapper predates it):
+
+```
+verifi payments-setup
+```
+
+It generates the gas wallet inside the verify-api image when `.env` has no
+`FACILITATOR_PRIVATE_KEY` (an existing key is never overwritten), derives and
+stores `FACILITATOR_ADDRESS` for balance monitoring, points
+`FACILITATOR_URL` at `http://facilitator:8080` (docker network only, so it
+stays off the public surface), deploys the facilitator and verify-api in
+that order, confirms via `/supported` that the facilitator serves `exact` on
+the configured network, and prints the gas balance. It is idempotent and
+audited, and it never writes the key anywhere except `.env`.
+
+The one step no command can do is money: send a few euros of ETH on Base to
+the printed gas wallet address, and copy the key from `.env` into the
+operator's encrypted keychain. The balance line in the output shows whether
+funding has happened. Settlement starts working the moment gas lands, with
+no rerun needed.
+
+The result can always be rechecked in the log, which is the whole check:
+
+```
+docker logs verifi-verify-api-1 2>&1 | grep -i facilitator
+```
+
+`facilitator serves exact on eip155:8453` means settlement works. Another
+`FACILITATOR MISMATCH` means the facilitator did not load the config or the
+chain is missing from it. Verify it directly with
+`curl -s localhost:8402/supported`, which must list scheme `exact` on
+`eip155:8453`. `verifi payments-setup` performs this same check and refuses
+to point verify-api at a facilitator that fails it.
+
+Until the gas wallet exists, the honest alternative is to keep the paid gates
+off. Leaving `X402_PAY_TO` unset makes both gates answer a clear 503 instead
+of advertising a price nothing can settle.
+
 ## Maintenance
 
 - Watch the gas wallet balance and top it up when it approaches a couple of
   euros.
+- Watch for `FACILITATOR MISMATCH` in the verify-api log after any change to
+  `X402_NETWORK`, `FACILITATOR_URL`, or `facilitator-config.json`.
 - If the gas wallet key is ever suspected leaked, generate a new wallet,
   move the till, and swap the key on the server. The receiving address can
   be changed with a single configuration change.

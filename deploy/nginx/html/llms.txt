@@ -42,7 +42,7 @@ x402 v2, exact scheme, USDC on Base mainnet eip155:8453. Entry and unlock are se
 - Unanswered human work expires after 60 minutes.
 - callback_url receives verify.ready or verify.failed and removes the need for an active polling loop. It never carries a locked result. Persist verify_id and use polling as the recovery path.
 - No API key, signup, account, or whitelist is required. Just a requester wallet. The wallet identifies free use and signs paid x402 authorizations.
-- Queue capacity is checked before gate 1 payment. A 429 or 503 admission response is not charged.
+- A refused admission response is never charged. x402 cancels settlement for any 4xx or 5xx answer, so POST /verify returns 402 with the payment requirements whenever the caller has no entitlement, including while the human queue is full, and reports 503 or 400 only after that gate.
 - GET polling never costs money.
 
 ## MCP

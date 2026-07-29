@@ -163,6 +163,10 @@ services:
       - ./facilitator-config.json:/app/config.json:ro
     environment:
       FACILITATOR_PRIVATE_KEY: ${FACILITATOR_PRIVATE_KEY:-}
+      # Explicit, because the default is resolved against the working
+      # directory. A config that is not found leaves zero schemes registered,
+      # which looks exactly like a facilitator that does not serve the network.
+      CONFIG: /app/config.json
 
   nginx:
     image: nginx:stable

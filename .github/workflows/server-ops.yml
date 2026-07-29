@@ -1,0 +1,59 @@
+# Remote ops dispatch: runs whitelisted verifi commands on the server over
+# SSH. The key in OPS_SSH_KEY is locked to scripts/verifi-remote.sh by a
+# forced command in authorized_keys, so this workflow can only reach the
+# verifi wrapper, never a shell. Bootstrap: docs/REMOTE_OPS.md.
+#
+# A push to main deploys automatically. Until the three OPS_* secrets exist
+# the job skips with a notice instead of failing, so this workflow is safe
+# to merge before the server side is bootstrapped.
+name: Server ops
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: verifi command to run on the server
+        required: true
+        type: choice
+        default: status
+        options:
+          - status
+          - deploy
+          - payments-setup
+          - logs verify-api
+          - logs facilitator
+          - logs core-api
+  push:
+    branches:
+      - main
+
+permissions: {}
+
+concurrency:
+  group: server-ops
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Run the command through the verifi wrapper
+        env:
+          OPS_SSH_KEY: ${{ secrets.OPS_SSH_KEY }}
+          OPS_SSH_HOST: ${{ secrets.OPS_SSH_HOST }}
+          OPS_SSH_USER: ${{ secrets.OPS_SSH_USER }}
+          OPS_COMMAND: ${{ inputs.command || 'deploy' }}
+        run: |
+          if [ -z "$OPS_SSH_KEY" ] || [ -z "$OPS_SSH_HOST" ]; then
+            echo "OPS_SSH_KEY / OPS_SSH_HOST secrets are not set. Skipping."
+            echo "Bootstrap the route once on the server: see docs/REMOTE_OPS.md"
+            exit 0
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$OPS_SSH_KEY" > ~/.ssh/ops_key
+          chmod 600 ~/.ssh/ops_key
+          echo "Dispatching: verifi $OPS_COMMAND"
+          ssh -i ~/.ssh/ops_key \
+            -o StrictHostKeyChecking=accept-new \
+            -o ConnectTimeout=15 \
+            "${OPS_SSH_USER:-root}@$OPS_SSH_HOST" "$OPS_COMMAND"

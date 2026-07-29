@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { agentStatus, publicView } from './verify.js';
+import { agentStatus, publicView, admissionRoute, isWallet } from './verify.js';
 
 const base = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -94,6 +94,58 @@ test('failed work stops polling and exposes the entry credit', () => {
   assert.equal(view.next_action, 'stop');
   assert.equal(view.failure.entry_credit_granted, true);
   assert.equal(view.failure.entry_credit_value_usdc, '0.10');
+});
+
+const quota = {
+  pending_count: 0,
+  queue_full: false,
+  has_entry_entitlement: false,
+  entitlement_admission_available: false,
+};
+
+test('a full queue still reaches the payment gate so the caller sees 402', () => {
+  // Regression: answering 503 before x402 hid the payment requirements from
+  // every unpaid caller, including discovery crawlers, whenever humans were
+  // busy. The core rejects the full queue after the gate, and that rejection
+  // cancels settlement, so the 0.10 USDC is never taken.
+  assert.equal(admissionRoute({ ...quota, queue_full: true }), 'payment-gate');
+});
+
+test('a full queue does not consume an entitlement either', () => {
+  assert.equal(
+    admissionRoute({ ...quota, queue_full: true, entitlement_admission_available: true }),
+    'entitlement',
+  );
+});
+
+test('an active chain is rejected before the payment gate', () => {
+  assert.equal(admissionRoute({ ...quota, pending_count: 1 }), 'active-chain');
+  assert.equal(
+    admissionRoute({ ...quota, pending_count: 1, entitlement_admission_available: true }),
+    'active-chain',
+  );
+});
+
+test('an entitlement is used only when it can actually be consumed', () => {
+  assert.equal(admissionRoute({ ...quota, entitlement_admission_available: true }), 'entitlement');
+  // Free allowance left but the platform's daily budget is spent: pay instead.
+  assert.equal(
+    admissionRoute({ ...quota, has_entry_entitlement: true, entitlement_admission_available: false }),
+    'payment-gate',
+  );
+  // Older core without the budget field falls back to the plain entitlement.
+  assert.equal(
+    admissionRoute({ pending_count: 0, has_entry_entitlement: true }),
+    'entitlement',
+  );
+});
+
+test('only a wallet address identifies a quota', () => {
+  assert.equal(isWallet('0x1111111111111111111111111111111111111111'), true);
+  assert.equal(isWallet('0x111'), false);
+  assert.equal(isWallet(undefined), false);
+  assert.equal(isWallet(null), false);
+  assert.equal(isWallet(12), false);
 });
 
 test('code and rendered docs match the canonical contract', () => {

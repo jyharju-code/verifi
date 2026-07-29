@@ -285,10 +285,15 @@ in the caller's wallet.
 | `402` | This gate requires an x402 payment |
 | `409` | Wrong lifecycle action, for example unlock before ready |
 | `429` | The wallet already has an active chain |
-| `503` | Human queue is full or paid routes are not configured |
+| `503` | Human queue is full or paid routes are not configured. Retry after the advertised delay |
 
-The server checks queue capacity before x402 middleware, so an admission
-request rejected with `429` or `503` is not charged.
+A refused admission request is never charged. The `429` for a wallet that
+already has an active chain is answered before the payment gate. Every other
+refusal is answered after it, and x402 cancels settlement for any `4xx` or
+`5xx` response, so the signed authorization is never submitted to the
+facilitator and no USDC moves. `POST /verify` therefore answers `402` with the
+payment requirements whenever the caller has no entitlement, including while
+the human queue is full and for a request that carries no valid `agent_id`.
 
 ## Audit model
 

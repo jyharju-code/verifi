@@ -52,6 +52,16 @@ one pending verify per `agent_id` (429, checked before the payment path so
 nobody pays into a rejection), a global pending cap (503 + Retry-After),
 and a 60 minute expiry per verify.
 
+The pending cap is deliberately enforced after the payment gate, not before
+it. Answering a full queue with 503 first meant an unpaid caller never saw the
+402 requirements, so x402 clients and discovery crawlers could not tell that
+`POST /verify` is a paid resource at all: a busy hour looked like a broken
+service. The cap is enforced by the core inside the admission transaction,
+which is the only place it can be correct under concurrency anyway. Nobody
+pays into that rejection either, because x402 cancels settlement for any 4xx
+or 5xx the route returns. The same reasoning puts request validation after the
+gate: a malformed `agent_id` gets 402 first, then 400, and is charged nothing.
+
 ## Failed admitted verifies grant entry credit
 
 If an admitted verify expires or otherwise fails without a redeemable result,
