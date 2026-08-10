@@ -174,8 +174,10 @@ services:
     logging: *default-logging
     profiles: ["edge"]
     ports:
-      - "80:80"
-      - "443:443"
+      # Bind only the public address in production so Tailscale Funnel can
+      # keep serving HTTPS on the Tailscale address after a host restart.
+      - "${PUBLIC_BIND_IP:-0.0.0.0}:80:80"
+      - "${PUBLIC_BIND_IP:-0.0.0.0}:443:443"
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./nginx/html:/var/www/verifi:ro
