@@ -1,0 +1,20 @@
+-- Remove the free human-work allowance for verify-api.
+--
+-- Human time is the scarce resource. The previous five-free-chains-per-wallet
+-- allowance could be farmed for unlimited free human work, because wallet
+-- addresses are free to mint: an external script could open five free chains
+-- per fresh address and fill the human queue without ever paying. From now on
+-- every chain pays: 0.10 USDC to enter the queue and 2.90 USDC to unlock the
+-- result.
+--
+-- What stays free needs no human: the docs, MCP discovery, and the 402
+-- Payment Required response itself, so an agent can still test the connection
+-- and read the exact price without paying.
+--
+-- Earned failure credits are unaffected. They are minted only when a chain
+-- whose entry was actually paid with x402 fails without a redeemable result,
+-- so they cannot be used to obtain free human work.
+--
+-- Idempotent. Setting the allowance to 0 does not touch chains already
+-- admitted or free uses already consumed; it only stops new free admissions.
+UPDATE instances SET free_tier_count = 0 WHERE id = 'verify-api';

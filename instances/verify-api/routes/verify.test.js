@@ -163,6 +163,6 @@ test('code and rendered docs match the canonical contract', () => {
   assert.equal(contract.totalPrice, view.funding.total_list_price_usdc);
   assert.match(markdown, new RegExp(`Contract version: ${contract.contractVersion}`));
   assert.match(html, new RegExp(`data-contract-version="${contract.contractVersion}"`));
-  assert.match(markdown, /five complete free chains/i);
-  assert.match(html, /Five complete free chains per wallet/i);
+  assert.match(markdown, /every verification is paid/i);
+  assert.match(html, /every verification is paid/i);
 });

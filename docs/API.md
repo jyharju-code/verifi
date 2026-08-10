@@ -22,22 +22,24 @@ One successful paid chain costs exactly 3.00 USDC on Base:
    `POST /verify-unlock?id={verify_id}` costs a new 2.90 USDC payment. The
    result is released only after this settlement succeeds.
 
-Every wallet receives five complete free chains. One free entitlement covers
-both gate 1 and gate 2, but the agent still performs the separate submit, poll,
-and unlock actions. Free and paid chains use the same queue, human workflow,
-statuses, timing, callbacks, and response shapes.
+Every verification is paid. Human time is the scarce resource, so there is no
+free human work: both gates above are charged on every chain. What is free
+needs no human. The docs, MCP discovery, and the `402 Payment Required`
+response itself cost nothing, so an agent can test the connection and read the
+exact price before paying.
 
-If an admitted chain fails without a redeemable result, the wallet receives
-one entry credit worth 0.10 USDC. The credit pays gate 1 of the next chain. It
-does not pay the 2.90 USDC result gate.
+If an admitted, paid chain fails without a redeemable result, the wallet
+receives one entry credit worth 0.10 USDC. The credit pays gate 1 of the next
+chain. It does not pay the 2.90 USDC result gate. Credits are minted only from
+a chain whose entry was actually paid, so they cannot be farmed for free work.
 
 ## Agent algorithm
 
 1. Send `POST /verify` with `intent`, `claim`, and the requester wallet in
    `agent_id`.
 2. If the server returns `402`, complete the x402 payment and repeat the same
-   request. A free entitlement or entry credit passes this gate without a
-   payment.
+   request. An earned entry credit, if the wallet has one, passes this gate
+   without a payment.
 3. Store the returned `verify_id` immediately. Prefer an HTTPS `callback_url`
    so the agent can yield until Verifi reports `ready` or `failed`.
 4. If no callback is available, or callback delivery fails, poll
@@ -46,7 +48,7 @@ does not pay the 2.90 USDC result gate.
 5. If status becomes `failed`, stop. Check `failure.entry_credit_granted`.
 6. If status becomes `ready`, call
    `POST /verify-unlock?id={verify_id}`. Complete a new x402 payment if the
-   response is `402`. A full-free chain passes this gate without payment.
+   response is `402`.
 7. Read the result only from a `completed` response.
 
 Do not impose a short fixed client deadline. Human work can take several
@@ -133,9 +135,9 @@ A ready response contains no verdict or answer:
 
 Call only when the callback or polling reports `ready`.
 
-For a paid chain or an entry-credit chain, the endpoint returns HTTP `402`
-with a new 2.90 USDC x402 requirement. Sign it and repeat the unlock request.
-For one of the first five full-free chains, no payment is requested.
+The endpoint returns HTTP `402` with a new 2.90 USDC x402 requirement. Sign it
+and repeat the unlock request. An entry credit does not cover this gate: the
+result always costs 2.90 USDC.
 
 The successful response has status `completed` and contains the human result:
 
@@ -273,9 +275,8 @@ signal and let the subsequent unlock action confirm the current state.
 
 Public Verify API and MCP calls require no API key, signup, account, or
 whitelist. The requester supplies a Base-compatible `0x` wallet address as
-`agent_id`. That wallet identifies the five free chains and signs x402
-authorizations after the free entitlement is exhausted. The private key stays
-in the caller's wallet.
+`agent_id`. That wallet signs the x402 payment authorizations and receives any
+earned entry credits. The private key stays in the caller's wallet.
 
 ## Errors
 

@@ -167,7 +167,7 @@
       <div class="arrow" aria-hidden="true">&rarr;</div>
       <div class="flow-step"><b>2.90 USDC</b><span>Gate 2 unlocks the verdict and explanation.</span></div>
     </div>
-    <div class="free-note"><strong>Five complete free chains per wallet.</strong> Free and paid reviews use the same submit, poll, and unlock actions. If admitted work fails, the wallet receives a 0.10 USDC entry credit for its next request.</div>
+    <div class="free-note"><strong>Every verification is paid.</strong> Human time is never free, so both gates are charged on every request. Free without a human: the docs, MCP discovery, and the <code>402</code> response that lets an agent test the connection and read the price. If an admitted, paid request fails, the wallet receives a 0.10 USDC entry credit for its next request.</div>
   </div>
 
   <div class="shell">
@@ -203,9 +203,9 @@
 
       <section class="feature" id="mcp">
         <div class="eyebrow">Recommended for agents</div>
-        <h2>Free and paid use both work through MCP.</h2>
-        <p>Connect to <code>https://verifi.cloud/mcp</code>. The same tools handle the first five free reviews and every paid review after them.</p>
-        <div class="callout"><strong>No API key, signup, account, or whitelist.</strong> Pass the requester's Base-compatible wallet address. It identifies the five free chains and signs later x402 payments without exposing its private key.</div>
+        <h2>Agents work through MCP.</h2>
+        <p>Connect to <code>https://verifi.cloud/mcp</code>. The same tools handle every paid review, and discovery plus the price check cost nothing.</p>
+        <div class="callout"><strong>No API key, signup, account, or whitelist.</strong> Pass the requester's Base-compatible wallet address. It signs the x402 payments without exposing its private key.</div>
         <div class="tool-grid">
           <div class="tool"><code>verify_claim</code><span>Submit the request, optionally register a callback, and pass gate 1.</span></div>
           <div class="tool"><code>get_verify</code><span>Poll the request without payment.</span></div>
@@ -292,7 +292,7 @@
       <section id="unlock">
         <div class="eyebrow">Gate 2</div>
         <h2>Unlock the human answer</h2>
-        <p>Use MCP <code>unlock_verify</code> or HTTP <code>POST /verify-unlock?id={verify_id}</code> only after status becomes <code>ready</code>. Paid and entry-credit reviews receive a new 2.90 USDC requirement. A complete free review passes without payment.</p>
+        <p>Use MCP <code>unlock_verify</code> or HTTP <code>POST /verify-unlock?id={verify_id}</code> only after status becomes <code>ready</code>. Every review receives a new 2.90 USDC requirement at this gate. An entry credit never covers it, so the result always costs 2.90 USDC.</p>
         <pre><code>{
   "verify_id": "a1b2c3d4-0000-4000-8000-000000000000",
   "status": "completed",

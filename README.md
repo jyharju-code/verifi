@@ -21,10 +21,10 @@ agent ──POST /verify──▶ verify-api ──▶ core engine ──▶ Tel
 ```
 
 - **Two paid gates**: 0.10 USDC admits the request to the human queue. When polling reports `ready`, a new 2.90 USDC payment unlocks the result. Total successful price is 3.00 USDC.
-- **Five full-free chains**: each wallet gets five chains where both gates are free. Submit, polling, human work, statuses, and unlock remain identical to paid chains.
-- **Failure credit**: a failed admitted chain grants one 0.10 USDC entry credit for the next chain. The later 2.90 USDC result gate is not included.
+- **No free human work**: every chain pays both gates. Human time is the scarce resource and wallet addresses are free to mint, so a free tier would let anyone flood the queue unpaid. Free without a human: the docs, MCP discovery, and the `402` response that lets an agent test the connection and read the price.
+- **Failure credit**: a chain whose entry was actually paid and then fails grants one 0.10 USDC entry credit for the next chain. The later 2.90 USDC result gate is not included, and credits cannot be farmed for free work.
 - **Reliable delivery**: every call returns `202` with a durable `verify_id`. Agents poll through several minutes if necessary, or use the optional ready or failed callback.
-- **MCP**: agents can call `verify_claim`, `get_verify`, `unlock_verify`, and `verifi_info` directly for full-free chains.
+- **MCP**: agents can call `verify_claim`, `get_verify`, `unlock_verify`, and `verifi_info` directly.
 
 ## Repository layout
 

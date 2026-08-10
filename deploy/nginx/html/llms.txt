@@ -17,11 +17,11 @@ OpenAPI 3.1 spec: https://verifi.cloud/openapi.json
 
 Total successful paid price: 0.10 + 2.90 = 3.00 USDC.
 
-## Free and credit funding
+## Free access and credit funding
 
-Every wallet receives five complete free chains. One initial_free entitlement covers both gate 1 and gate 2. The agent still performs the same submit, poll, and unlock actions. There are no queue, human workflow, timing, status, or response-shape differences between free and paid chains. A free use is counted when a chain completes, so an unanswered free chain does not consume one of the five.
+Every verification is paid. There is no free human work and no free chains. What is free, because it needs no human: the documentation, MCP discovery, and the 402 Payment Required response itself. An agent can send an unpaid request, receive a 402 with the exact price and x402 requirements, and thereby test the connection and read the price without paying. initial_free is a legacy funding source only, kept for historical chains, and no longer grants free human work.
 
-If an admitted chain fails without a redeemable result, what the wallet gets back depends on how gate 1 was funded. If gate 1 was paid with x402, the wallet receives one failure_credit worth 0.10 USDC. It covers gate 1 of the next chain and does not cover gate 2, which still costs 2.90 USDC. If gate 1 was funded by an entitlement, either a free chain or an earlier credit, that entitlement is returned to the wallet instead and no new credit is minted. Read failure.entry_credit_granted to see which happened.
+If an admitted chain fails without a redeemable result, what the wallet gets back depends on how gate 1 was funded. If gate 1 was paid with x402, the wallet receives one failure_credit worth 0.10 USDC. It covers gate 1 of the next chain and does not cover gate 2, which still costs 2.90 USDC. If gate 1 was funded by an earlier credit rather than a fresh x402 payment, that entitlement is returned to the wallet instead and no new credit is minted. Credits therefore come only from a paid, failed chain and cannot be farmed for free work. Read failure.entry_credit_granted to see which happened.
 
 ## Statuses
 
@@ -41,7 +41,7 @@ x402 v2, exact scheme, USDC on Base mainnet eip155:8453. Entry and unlock are se
 - One active chain per wallet.
 - Unanswered human work expires after 60 minutes.
 - callback_url receives verify.ready or verify.failed and removes the need for an active polling loop. It never carries a locked result. Persist verify_id and use polling as the recovery path.
-- No API key, signup, account, or whitelist is required. Just a requester wallet. The wallet identifies free use and signs paid x402 authorizations.
+- No API key, signup, account, or whitelist is required. Just a requester wallet. The wallet signs the x402 payments and receives any earned credits.
 - A refused admission response is never charged. x402 cancels settlement for any 4xx or 5xx answer, so POST /verify returns 402 with the payment requirements whenever the caller has no entitlement, including while the human queue is full, and reports 503 or 400 only after that gate.
 - GET polling never costs money.
 
@@ -51,8 +51,8 @@ Endpoint: https://verifi.cloud/mcp
 
 Tools: verify_claim, get_verify, unlock_verify, verifi_info. verify_claim accepts optional callback_url.
 
-Free and paid chains use the same MCP tools. If a gate is paid, the tool returns a standard x402 PaymentRequired result with x402Version, accepts, and the MCP resource. An x402-aware MCP client signs the selected requirement with the requester wallet and repeats the same tool call using x402/payment metadata. A successful paid call returns x402/payment-response metadata. Generic MCP clients can instead pass an encoded authorization through the optional payment_signature argument. Never send a private key. Gate 1 and gate 2 require separate signatures tied to the same verify_id.
+All chains use the same MCP tools. If a gate is paid, the tool returns a standard x402 PaymentRequired result with x402Version, accepts, and the MCP resource. An x402-aware MCP client signs the selected requirement with the requester wallet and repeats the same tool call using x402/payment metadata. A successful paid call returns x402/payment-response metadata. Generic MCP clients can instead pass an encoded authorization through the optional payment_signature argument. Never send a private key. Gate 1 and gate 2 require separate signatures tied to the same verify_id.
 
 ## Audit
 
-PostgreSQL stores wallet address, request content, both list prices, both charged amounts, both transaction hashes, lifecycle timestamps, all five free uses, failure credits, their source chains, and their consuming chains. audit_log is append-only.
+PostgreSQL stores wallet address, request content, both list prices, both charged amounts, both transaction hashes, lifecycle timestamps, failure credits, their source chains, and their consuming chains. audit_log is append-only.

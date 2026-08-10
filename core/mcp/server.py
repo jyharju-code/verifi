@@ -35,8 +35,8 @@ mcp = FastMCP(
         "or a refined free-text correction. Every chain has two gates. Use "
         "verify_claim with callback_url, then use unlock_verify when the "
         "callback reports ready. If no callback is available, poll get_verify. "
-        "The first 5 complete chains per wallet are "
-        "free at both gates. After that, x402-aware MCP clients can sign and "
+        "Every chain is paid: 0.10 USDC entry, then 2.90 USDC unlock. There is "
+        "no free human work. x402-aware MCP clients can sign and "
         "repeat paid tool calls automatically. Generic clients can pass the "
         "signed authorization as payment_signature. Pass callback_url to "
         "receive ready or failed events without an active polling loop. No "
@@ -133,7 +133,7 @@ async def verify_claim(
 
     intent: what your agent is trying to do (max 2000 chars).
     claim: the claim a human should verify (max 4000 chars).
-    agent_id: your wallet address (0x + 40 hex). Grants 5 free verifies.
+    agent_id: your wallet address (0x + 40 hex). Signs the x402 payments.
     callback_url: optional HTTPS endpoint for verify.ready or verify.failed.
     Use it to avoid an active polling loop; retain verify_id for recovery.
     payment_signature: optional manual compatibility input. Standard x402-aware
@@ -174,10 +174,10 @@ async def unlock_verify(
 ) -> CallToolResult:
     """Pass gate 2 for a ready chain and return the human result.
 
-    The first five chains per wallet are free at both gates. After that, omit
-    payment_signature first. Standard x402-aware MCP clients handle the payment
-    request and retry through MCP metadata automatically. Generic clients can
-    pass the resulting x402 signature manually. Never pass a private key.
+    This gate costs 2.90 USDC. Omit payment_signature first: standard x402-aware
+    MCP clients handle the payment request and retry through MCP metadata
+    automatically. Generic clients can pass the resulting x402 signature
+    manually. Never pass a private key.
     """
     signature = payment_signature or _encode_payment_signature(_payment_from_context(ctx))
     headers = {"PAYMENT-SIGNATURE": signature} if signature else {}
@@ -205,7 +205,7 @@ def verifi_info() -> dict:
             "summary": "No API key, signup, or account. Use the requester wallet address.",
         },
         "pricing": {
-            "free": "5 complete chains per wallet, entry and unlock both free",
+            "free": "docs, MCP discovery, and the 402 response only. No free human work.",
             "paid": "0.10 USDC entry, then a separate 2.90 USDC unlock, total 3.00 USDC",
         },
         "mcp_payment": (

@@ -574,7 +574,9 @@ async def create_verify(body: VerifyIn) -> dict:
                 # Count free uses actually consumed, not merely ever granted.
                 # A free chain that expires unanswered releases its slot (see
                 # _expire_stale_once), so it is not counted here and the wallet
-                # keeps its promised five complete free chains.
+                # keeps its full free allowance. For verify-api that allowance
+                # is now 0, so this branch does nothing; it stays generic for
+                # any instance that sets free_tier_count above 0.
                 free_used = await conn.fetchval(
                     """
                     SELECT count(*) FROM wallet_entitlements

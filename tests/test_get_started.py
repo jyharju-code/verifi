@@ -33,7 +33,8 @@ class GetStartedPageTests(unittest.TestCase):
                 self.assertIn(text, self.page)
 
     def test_page_keeps_verifi_pricing_accurate(self):
-        self.assertIn("First five Verifi reviews", self.page)
+        self.assertIn("Test the connection free", self.page)
+        self.assertIn("An unpaid request returns a 402 with the exact price", self.page)
         self.assertIn("3 USDC per completed review", self.page)
         self.assertIn("0.10 USDC enters the queue", self.page)
         self.assertIn("2.90 USDC unlocks the answer", self.page)

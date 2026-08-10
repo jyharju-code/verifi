@@ -3,7 +3,7 @@
   "info": {
     "title": "Verifi Agent API",
     "summary": "Human judgment your AI agent can call, paid per request with x402.",
-    "description": "Verifi routes an agent request to a real human and returns the human verdict.\n\nEvery verification is one chain with two explicit gates. Gate 1 (0.10 USDC) admits the request to the human queue. Gate 2 (2.90 USDC) unlocks the ready result. The first five complete chains per wallet are free at both gates.\n\nHuman work takes minutes, so the API is asynchronous and resumable through a durable verify_id. Prefer callback_url over polling. No API key, signup, or account is required: the requester wallet address is the identity.\n\nContract version 2.",
+    "description": "Verifi routes an agent request to a real human and returns the human verdict.\n\nEvery verification is one chain with two explicit gates. Gate 1 (0.10 USDC) admits the request to the human queue. Gate 2 (2.90 USDC) unlocks the ready result. Every verification is paid; human time is never free. What is free needs no human: this document, MCP discovery, and the 402 Payment Required response, so an agent can test the connection and read the exact price before paying.\n\nHuman work takes minutes, so the API is asynchronous and resumable through a durable verify_id. Prefer callback_url over polling. No API key, signup, or account is required: the requester wallet address is the identity.\n\nContract version 2.",
     "version": "2.0.0",
     "contact": {
       "name": "Verifi",
@@ -40,7 +40,7 @@
         "tags": ["verify"],
         "operationId": "createVerify",
         "summary": "Gate 1: submit a claim and enter the human queue",
-        "description": "Submits work for a human and admits it to the queue.\n\nFunding is decided per wallet. If the wallet still has one of its five free chains, or an entry credit, admission is free and the response is 202. Otherwise the endpoint answers 402 with x402 payment requirements for 0.10 USDC. Sign the requirement with the requester wallet and repeat the same request.\n\nA paid chain does not enter the human queue before its entry settlement is recorded. A refused request never charges the caller: x402 cancels settlement for any 4xx or 5xx answer, so the signed authorization is never submitted. This endpoint therefore answers 402 whenever the caller has no entitlement, including while the human queue is full, and answers 503 or 400 only after the payment gate.\n\nStore verify_id from the response. It is the only durable handle for the rest of the chain.",
+        "description": "Submits work for a human and admits it to the queue.\n\nEvery admission is paid. If the wallet has an earned entry credit, admission is free and the response is 202. Otherwise the endpoint answers 402 with x402 payment requirements for 0.10 USDC. Sign the requirement with the requester wallet and repeat the same request.\n\nA paid chain does not enter the human queue before its entry settlement is recorded. A refused request never charges the caller: x402 cancels settlement for any 4xx or 5xx answer, so the signed authorization is never submitted. This endpoint therefore answers 402 whenever the caller has no entitlement, including while the human queue is full, and answers 503 or 400 only after the payment gate.\n\nStore verify_id from the response. It is the only durable handle for the rest of the chain.",
         "parameters": [
           {
             "$ref": "#/components/parameters/PaymentSignature"
@@ -92,8 +92,8 @@
                   "$ref": "#/components/schemas/VerifyAccepted"
                 },
                 "examples": {
-                  "freeChain": {
-                    "summary": "First five chains per wallet: both gates free",
+                  "creditChain": {
+                    "summary": "Entry covered by an earned failure credit: no new entry payment",
                     "value": {
                       "verify_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
                       "status": "processing",
@@ -104,8 +104,8 @@
                       "response_time_ms": null,
                       "wallet_address": "0x1111111111111111111111111111111111111111",
                       "funding": {
-                        "entry_source": "initial_free",
-                        "free_use_number": 1,
+                        "entry_source": "failure_credit",
+                        "free_use_number": null,
                         "entry_list_price_usdc": "0.10",
                         "entry_charged_usdc": "0.00",
                         "unlock_source": null,
@@ -327,7 +327,7 @@
         "tags": ["verify"],
         "operationId": "unlockVerify",
         "summary": "Gate 2: unlock the ready human result",
-        "description": "Call this only when status is ready.\n\nIf the chain was funded by one of the wallet's five free entitlements, the same entitlement covers gate 2 and the answer returns immediately. Otherwise the endpoint answers 402 with x402 payment requirements for 2.90 USDC. Sign the requirement with the requester wallet and repeat the same request.\n\nThe result body is released only after the gate 2 settlement succeeds. Unlocking twice does not charge twice: once the chain is completed, the answer is returned without a new payment.",
+        "description": "Call this only when status is ready.\n\nThe endpoint answers 402 with x402 payment requirements for 2.90 USDC. Sign the requirement with the requester wallet and repeat the same request. An entry credit never covers this gate; the result always costs 2.90 USDC.\n\nThe result body is released only after the gate 2 settlement succeeds. Unlocking twice does not charge twice: once the chain is completed, the answer is returned without a new payment.",
         "parameters": [
           {
             "$ref": "#/components/parameters/VerifyIdQuery"
@@ -717,7 +717,7 @@
             "type": ["integer", "null"],
             "minimum": 1,
             "maximum": 5,
-            "description": "Which of the wallet's five free chains this is, when funded by initial_free."
+            "description": "Legacy field: which historical free chain this was, when funded by initial_free. Null for new chains, since free human work is no longer granted."
           },
           "entry_list_price_usdc": {
             "type": "string",
@@ -787,7 +787,7 @@
           },
           "entry_credit_granted": {
             "type": "boolean",
-            "description": "True when the wallet received a 0.10 USDC entry credit for the next chain. Granted when gate 1 was actually paid with x402. When gate 1 was funded by an entitlement, that entitlement is returned to the wallet instead, so a free chain is not lost."
+            "description": "True when the wallet received a 0.10 USDC entry credit for the next chain. Granted when gate 1 was actually paid with x402. When gate 1 was funded by an earned credit, that credit is returned to the wallet instead, so it is not lost."
           },
           "entry_credit_value_usdc": {
             "type": "string",
