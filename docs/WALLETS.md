@@ -83,13 +83,15 @@ event. The append-only audit log records every money-related transition.
    and the facilitator settles the second transaction.
 10. The completed response contains the answer. Total charged is 3.00 USDC.
 
-## Free chains and failure credits
+## No free chains, only earned failure credits
 
-The first five chains per wallet are free in full. One entitlement covers the
-0.10 and 2.90 USDC gates while preserving the same submit, poll, and unlock
-sequence. If admitted work fails without a redeemable result, the wallet gets
-one entry-only credit. It replaces the next 0.10 USDC payment but does not
-replace the later 2.90 USDC unlock payment.
+There is no free human work: every chain pays the 0.10 and 2.90 USDC gates
+(`verify-api.free_tier_count` is `0`). The only way a gate is covered without a
+fresh payment is an earned credit: if an admitted chain whose entry was
+actually paid fails without a redeemable result, the wallet gets one entry-only
+credit. It replaces the next 0.10 USDC payment but not the later 2.90 USDC
+unlock. Because credits come only from a paid, failed chain, they cannot be
+farmed for free work.
 
 ## Turning on mainnet settlement
 
@@ -97,8 +99,9 @@ The postman has to serve the chain the prices are quoted in. The default
 `FACILITATOR_URL=https://x402.org/facilitator` is testnet only: it serves
 scheme `exact` on `eip155:84532` (Base Sepolia), never on the `eip155:8453`
 mainnet in `X402_NETWORK`. With that pair, both paid gates refuse every
-request and verify-api logs `FACILITATOR MISMATCH` at startup. Free chains
-keep working, because they never touch a facilitator.
+request and verify-api logs `FACILITATOR MISMATCH` at startup. Admissions that
+need no fresh payment, such as an entry funded by an earned credit, keep
+working, because they never touch a facilitator.
 
 The fix is the self-hosted facilitator already defined in
 `deploy/docker-compose.yml` under the `payments` profile, which the `verifi`

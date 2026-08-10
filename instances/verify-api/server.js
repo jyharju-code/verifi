@@ -217,7 +217,7 @@ if (X402_PAY_TO) {
   app.post('/verify-unlock', (_req, res) => {
     res.status(503).json({ error: 'paid unlock is not configured' });
   });
-  console.warn('X402_PAY_TO not set: only full-free chains are available');
+  console.warn('X402_PAY_TO not set: paid admission is off and no free tier exists, so /verify only serves earned-credit chains');
 }
 
 app.post('/verify/:id/unlock', (req, res) => {

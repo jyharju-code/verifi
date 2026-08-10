@@ -19,13 +19,19 @@ small dedicated gas wallet. Revenue settles directly from the buyer to the
 operator's receiving address; the facilitator never holds funds. See
 [WALLETS.md](WALLETS.md).
 
-## Five full-free chains per wallet
+## No free human work
 
-Each wallet receives five complete free chains. One `initial_free` entitlement
-covers both the 0.10 USDC entry gate and the 2.90 USDC result gate. It does not
-bypass either lifecycle action: free agents submit, poll, and unlock with the
-same statuses and response shape as paid agents. Consumption is stored in
-`wallet_entitlements`, including the wallet, free-use number, and verify id.
+Human time is the scarce resource, so no chain is free: every verification pays
+the 0.10 USDC entry gate and the 2.90 USDC result gate. The earlier
+five-free-chains-per-wallet allowance was removed (`verify-api.free_tier_count`
+is `0`) because wallet addresses are free to mint, so an external script could
+open five free human verifications per fresh address and flood the queue
+without ever paying. What stays free needs no human: the docs, MCP discovery,
+and the `402 Payment Required` response that lets an agent test the connection
+and read the price. Note `FREE_DAILY_MAX=0` means unlimited, not zero, so the
+allowance is switched off at the instance level, not through that budget. The
+`initial_free` entitlement mechanism remains in the schema for historical
+chains and so a future instance can re-enable it, but no new ones are granted.
 
 ## Admission follows settlement, not creation
 

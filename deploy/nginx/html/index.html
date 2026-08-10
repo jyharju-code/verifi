@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Verifi: Human judgment for AI agents</title>
-  <meta name="description" content="Verifi lets AI agents ask a real person for a decision, correction, or better answer. The first five complete reviews are free, then 3 USDC each.">
+  <meta name="description" content="Verifi lets AI agents ask a real person for a decision, correction, or better answer. Every review is 3 USDC. Reading the price and testing the connection cost nothing.">
   <meta name="theme-color" content="#080908">
   <link rel="canonical" href="https://verifi.cloud/">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23d9ff57'/%3E%3Ccircle cx='32' cy='32' r='10' fill='%23080908'/%3E%3C/svg%3E">
@@ -385,13 +385,13 @@
       <div>
         <div class="eyebrow">Human judgment for AI agents</div>
         <h1>Give your AI agent access to <span>real human judgment.</span></h1>
-        <p class="hero-lead">Send a question, claim, or draft to a human responder. Get back a clear verdict or a stronger answer your agent can use. The first five complete reviews are free, then 3 USDC each.</p>
+        <p class="hero-lead">Send a question, claim, or draft to a human responder. Get back a clear verdict or a stronger answer your agent can use. Every review is 3 USDC. Reading the price and testing the connection cost nothing.</p>
         <div class="hero-actions">
           <a class="btn primary" href="/docs/get-started/">Get started</a>
           <a class="btn" href="#protocol">See how it works</a>
         </div>
         <div class="hero-facts" aria-label="Protocol summary">
-          <span class="pill">Five reviews free</span>
+          <span class="pill">Free price check</span>
           <span class="pill">No signup or API keys</span>
           <span class="pill">USDC on Base</span>
           <span class="pill">Clear human verdict</span>
@@ -463,14 +463,14 @@
         </div>
         <div class="card promise">
           <div>
-            <div class="eyebrow">Try the complete service free</div>
-            <h3>Your first five reviews cost nothing.</h3>
-            <p>Free reviews work exactly like paid reviews. Your agent sends the request, waits for the human decision, and unlocks the answer, with both fees reduced to 0.00 USDC.</p>
+            <div class="eyebrow">Test before you pay</div>
+            <h3>Read the price without paying.</h3>
+            <p>The documentation, MCP discovery, and the 402 Payment Required response are free. Your agent can send an unpaid request, receive a 402 with the exact price and x402 requirements, and test the connection before it ever signs a payment.</p>
           </div>
           <ul class="promise-list">
-            <li><b>01</b> Each free review covers both payment steps.</li>
-            <li><b>02</b> Every wallet receives five complete free reviews.</li>
-            <li><b>03</b> If an admitted request fails, the wallet receives a 0.10 USDC entry credit.</li>
+            <li><b>01</b> Discovery and the price check cost nothing.</li>
+            <li><b>02</b> Every review is paid: 0.10 USDC to enter the queue, 2.90 USDC to unlock the answer.</li>
+            <li><b>03</b> If a request whose entry you actually paid fails without an answer, the wallet receives a 0.10 USDC entry credit toward gate 1 of its next request.</li>
           </ul>
         </div>
       </div>
@@ -508,7 +508,7 @@
             <span class="window-title">quickstart.sh</span>
             <button class="copy-button" type="button" data-copy="quickstart-code">Copy</button>
           </div>
-          <pre id="quickstart-code"><span class="code-dim"># Send a request. The first five complete reviews are free.</span>
+          <pre id="quickstart-code"><span class="code-dim"># Send a request. An unpaid request returns a 402 with the exact price to sign.</span>
 curl -X POST https://verifi.cloud/verify \
   -H "Content-Type: application/json" \
   -d '{
@@ -564,19 +564,19 @@ curl -X POST "https://verifi.cloud/verify-unlock?id={verify_id}"</pre>
       <div class="section-head">
         <div>
           <div class="eyebrow">Pricing</div>
-          <h2>Five reviews free. Then 3 USDC per completed review.</h2>
+          <h2>3 USDC per completed review.</h2>
         </div>
         <p>The price is split into a 0.10 USDC entry fee and a 2.90 USDC answer fee. You only pay the second fee when an answer is ready to unlock.</p>
       </div>
       <div class="pricing-grid">
         <div class="card price-card">
-          <span class="pill">Evaluation</span>
-          <div class="price">0 <small>USDC per review</small></div>
-          <h3>Your first five complete reviews</h3>
+          <span class="pill">Free to try</span>
+          <div class="price">0 <small>USDC to read the price</small></div>
+          <h3>Discovery and the price check</h3>
           <ul>
-            <li>Both the 0.10 and 2.90 USDC fees are waived.</li>
-            <li>Free reviews work exactly like paid reviews.</li>
-            <li>Each wallet receives its own five free reviews.</li>
+            <li>The docs, MCP discovery, and the 402 response are free.</li>
+            <li>An unpaid request returns a 402 with the exact price and x402 requirements.</li>
+            <li>Test the connection and read the price before you sign a payment.</li>
           </ul>
         </div>
         <div class="card price-card paid-card">
@@ -598,7 +598,7 @@ curl -X POST "https://verifi.cloud/verify-unlock?id={verify_id}"</pre>
       <div class="card ledger-copy">
         <div class="eyebrow">Clear records</div>
         <h2>See what was asked, paid, and answered.</h2>
-        <p>Every verification connects the requester wallet, original question, payment, status, human outcome, and any free use or credit in one record.</p>
+        <p>Every verification connects the requester wallet, original question, payment, status, human outcome, and any earned credit in one record.</p>
         <a class="btn" href="/docs/">Read the API contract</a>
       </div>
       <div class="card ledger-table" aria-label="Recorded verification fields">
@@ -606,7 +606,7 @@ curl -X POST "https://verifi.cloud/verify-unlock?id={verify_id}"</pre>
         <div class="ledger-row"><b>ENTRY</b><span>How the request entered the queue and what it cost</span></div>
         <div class="ledger-row"><b>REVIEW</b><span>When human work started, finished, or failed</span></div>
         <div class="ledger-row"><b>ANSWER</b><span>The final verdict, explanation, and unlock payment</span></div>
-        <div class="ledger-row"><b>FREE USES</b><span>Which free review or failure credit was used</span></div>
+        <div class="ledger-row"><b>CREDITS</b><span>Which failure credit funded the entry, if any</span></div>
       </div>
     </div>
   </section>

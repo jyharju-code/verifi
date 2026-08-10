@@ -1,7 +1,8 @@
 -- Transparent wallet entitlement ledger.
 --
--- initial_free rows represent one of the five complete free chains. They
--- cover both the 0.10 USDC entry gate and the 2.90 USDC result gate.
+-- initial_free rows are legacy: they represent a historical full-free chain
+-- and cover both the 0.10 USDC entry gate and the 2.90 USDC result gate.
+-- No new ones are granted while free_tier_count is 0 (see instances).
 -- failure_credit rows are granted by a failed admitted verify and cover only
 -- the next 0.10 USDC entry gate. Rows are never deleted.
 

@@ -2,8 +2,8 @@
  * Agent-facing two-gate Verify API handlers.
  *
  * Gate 1 admits a chain to the human queue for 0.10 USDC. Gate 2 unlocks
- * its ready result for 2.90 USDC. The first five chains per wallet use one
- * full-free entitlement each, but still pass through both explicit gates.
+ * its ready result for 2.90 USDC. There is no free human work; an earned
+ * failure credit can cover gate 1 of a later chain, but never gate 2.
  * Every POST returns a durable id and every result is retrieved by polling.
  */
 import { Router } from 'express';
