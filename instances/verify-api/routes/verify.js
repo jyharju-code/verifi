@@ -74,12 +74,12 @@ function auditClientContext(req) {
   };
 }
 
-function callbackHost(url) {
+export function callbackHost(url) {
   if (typeof url !== 'string' || !url) return null;
   try { return new URL(url).hostname.slice(0, 255); } catch { return null; }
 }
 
-function claimDigest(claim) {
+export function claimDigest(claim) {
   if (typeof claim !== 'string' || !claim) return { claim_len: null, claim_sha256: null };
   return {
     claim_len: claim.length,
@@ -87,7 +87,7 @@ function claimDigest(claim) {
   };
 }
 
-function outcomeFromStatus(status) {
+export function outcomeFromStatus(status) {
   if (status === 202) return 'admitted';
   if (status === 200) return 'completed';
   if (status === 402) return 'payment_required';

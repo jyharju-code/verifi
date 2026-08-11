@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { agentStatus, publicView, admissionRoute, isWallet } from './verify.js';
+import {
+  agentStatus, publicView, admissionRoute, isWallet,
+  claimDigest, callbackHost, outcomeFromStatus,
+} from './verify.js';
 
 const base = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -146,6 +149,38 @@ test('only a wallet address identifies a quota', () => {
   assert.equal(isWallet(undefined), false);
   assert.equal(isWallet(null), false);
   assert.equal(isWallet(12), false);
+});
+
+test('a claim is reduced to length and sha256, never its text, for the audit', () => {
+  const claim = 'The launch date is 1 September and existing customers keep the old price.';
+  const d = claimDigest(claim);
+  assert.equal(d.claim_len, claim.length);
+  assert.match(d.claim_sha256, /^[0-9a-f]{64}$/);
+  // The digest must not carry the text or any substring of it.
+  assert.ok(!JSON.stringify(d).includes('launch'));
+  assert.ok(!JSON.stringify(d).includes(claim));
+  // Empty or non-string claim yields nulls, not a hash of "".
+  assert.deepEqual(claimDigest(''), { claim_len: null, claim_sha256: null });
+  assert.deepEqual(claimDigest(undefined), { claim_len: null, claim_sha256: null });
+});
+
+test('a callback url is reduced to its host, dropping path and query', () => {
+  assert.equal(
+    callbackHost('https://agent.example.com/verifi-events?token=secret&id=9'),
+    'agent.example.com',
+  );
+  assert.equal(callbackHost('not a url'), null);
+  assert.equal(callbackHost(undefined), null);
+  assert.equal(callbackHost(null), null);
+});
+
+test('outcome maps the money-relevant statuses', () => {
+  assert.equal(outcomeFromStatus(202), 'admitted');
+  assert.equal(outcomeFromStatus(402), 'payment_required');
+  assert.equal(outcomeFromStatus(429), 'rejected_active');
+  assert.equal(outcomeFromStatus(503), 'unavailable');
+  assert.equal(outcomeFromStatus(200), 'completed');
+  assert.equal(outcomeFromStatus(400), 'bad_request');
 });
 
 test('code and rendered docs match the canonical contract', () => {

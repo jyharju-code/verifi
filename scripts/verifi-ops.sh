@@ -128,6 +128,14 @@ case "$CMD" in
         exit 1
     fi
     ;;
+  acceptance-logging)
+    require_turn
+    audit "acceptance_logging_started" "{}"
+    bash scripts/acceptance-logging.sh "${1:-https://verifi.cloud}"
+    rc=$?
+    audit "acceptance_logging_finished" "{\"exit\": $rc}"
+    exit $rc
+    ;;
   env-set)
     require_turn
     [ $# -ge 2 ] || { echo "Usage: verifi env-set KEY value"; exit 1; }
@@ -232,7 +240,7 @@ case "$CMD" in
     ls -la /root/backups/ | tail -3
     ;;
   *)
-    echo "Verifi ops. Usage: verifi status|turn|deploy|restart|logs|env-set|payments-setup|logging-setup|backup"
+    echo "Verifi ops. Usage: verifi status|turn|deploy|restart|logs|env-set|payments-setup|logging-setup|acceptance-logging|backup"
     echo "Actor: VERIFI_ACTOR=claude|hermes|juhana. Mutating commands require the turn (verifi turn)."
     exit 1
     ;;
