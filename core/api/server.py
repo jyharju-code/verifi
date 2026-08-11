@@ -983,7 +983,7 @@ class ContactIn(BaseModel):
 
 
 @app.post("/contact")
-async def contact(body: ContactIn, request: Request | None = None) -> dict:
+async def contact(body: ContactIn, request: Request = None) -> dict:
     """Public contact form (proxied through nginx). Delivers to Telegram."""
     if request is not None:
         await create_request_audit(RequestAuditIn(
