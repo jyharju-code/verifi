@@ -12,6 +12,7 @@ Endpoints:
 import asyncio
 import contextlib
 import hmac
+import ipaddress
 import logging
 import os
 from uuid import UUID
@@ -51,6 +52,36 @@ class VerifyIn(BaseModel):
     agent_id: str = Field(pattern="^0x[0-9a-fA-F]{40}$")
     admission_mode: str = Field(pattern="^(entitlement|x402)$")
     callback_url: str | None = Field(default=None, max_length=2048)
+    # nginx request id, for correlation with the access log and request_audit.
+    request_id: str | None = Field(default=None, max_length=128)
+
+
+class RequestAuditIn(BaseModel):
+    """One durable audit row. Callers must send only safe, redacted fields.
+
+    Never accepted here: request or response bodies, claim or intent text,
+    full callback URLs, or any secret header. claim_len and claim_sha256 are
+    the only claim-derived values allowed.
+    """
+    source: str = Field(pattern="^(rest|mcp|website)$")
+    request_id: str | None = Field(default=None, max_length=128)
+    route: str | None = Field(default=None, max_length=200)
+    client_ip: str | None = Field(default=None, max_length=64)
+    forwarded_for: str | None = Field(default=None, max_length=512)
+    forwarded_trusted: bool = False
+    user_agent: str | None = Field(default=None, max_length=512)
+    agent_id: str | None = Field(default=None, max_length=100)
+    verify_id: str | None = Field(default=None, max_length=64)
+    verify_no: int | None = None
+    callback_host: str | None = Field(default=None, max_length=255)
+    admission_source: str | None = Field(default=None, max_length=20)
+    http_status: int | None = None
+    payment_required: bool | None = None
+    funding_state: str | None = Field(default=None, max_length=24)
+    outcome: str | None = Field(default=None, max_length=32)
+    wallet_ownership_proven: bool = False
+    claim_len: int | None = None
+    claim_sha256: str | None = Field(default=None, max_length=64)
 
 
 # The verdict an agent can parse without guessing: the human's button maps to
@@ -555,9 +586,9 @@ async def create_verify(body: VerifyIn) -> dict:
                 """
                 INSERT INTO verifies (
                     instance, intent, claim, agent_id, tier, status,
-                    entry_source, callback_url
+                    entry_source, callback_url, request_id
                 )
-                VALUES ($1, $2, $3, $4, $5, 'admission_pending', $6, $7)
+                VALUES ($1, $2, $3, $4, $5, 'admission_pending', $6, $7, $8)
                 RETURNING *
                 """,
                 body.instance,
@@ -567,6 +598,7 @@ async def create_verify(body: VerifyIn) -> dict:
                 "free" if body.admission_mode == "entitlement" else "paid",
                 "x402" if body.admission_mode == "x402" else None,
                 body.callback_url,
+                body.request_id,
             )
 
             if body.admission_mode == "entitlement":
@@ -951,8 +983,20 @@ class ContactIn(BaseModel):
 
 
 @app.post("/contact")
-async def contact(body: ContactIn) -> dict:
+async def contact(body: ContactIn, request: Request) -> dict:
     """Public contact form (proxied through nginx). Delivers to Telegram."""
+    await create_request_audit(RequestAuditIn(
+        source="website",
+        route="/contact",
+        request_id=request.headers.get("x-request-id"),
+        client_ip=request.headers.get("x-real-ip"),
+        forwarded_for=request.headers.get("x-forwarded-for"),
+        forwarded_trusted=request.headers.get("x-forwarded-trusted") == "1",
+        user_agent=(request.headers.get("user-agent") or "")[:512] or None,
+        http_status=200,
+        payment_required=False,
+        outcome="contact_received",
+    ))
     if body.company_website:
         await audit("core-api", "contact_spam_filtered", {})
         return {"ok": True, "delivery": "filtered"}
@@ -990,6 +1034,42 @@ async def contact(body: ContactIn) -> dict:
         {"telegram_message_id": message_id},
     )
     return {"ok": True, "delivery": "telegram"}
+
+
+@app.post("/internal/request-audit")
+async def create_request_audit(body: RequestAuditIn) -> dict:
+    """Append one durable request audit row. Best effort, like the money audit:
+    a failure here is logged but never breaks the request that produced it."""
+    client_ip = body.client_ip
+    if client_ip:
+        try:
+            ipaddress.ip_address(client_ip)
+        except ValueError:
+            client_ip = None
+    try:
+        db = await get_pool()
+        await db.execute(
+            """
+            INSERT INTO request_audit (
+                request_id, source, route, client_ip, forwarded_for,
+                forwarded_trusted, user_agent, agent_id, verify_id, verify_no,
+                callback_host, admission_source, http_status, payment_required,
+                funding_state, outcome, wallet_ownership_proven, claim_len,
+                claim_sha256
+            )
+            VALUES ($1, $2, $3, $4::inet, $5, $6, $7, $8, $9::uuid, $10,
+                    $11, $12, $13, $14, $15, $16, $17, $18, $19)
+            """,
+            body.request_id, body.source, body.route, client_ip,
+            body.forwarded_for, body.forwarded_trusted, body.user_agent,
+            body.agent_id, body.verify_id, body.verify_no, body.callback_host,
+            body.admission_source, body.http_status, body.payment_required,
+            body.funding_state, body.outcome, body.wallet_ownership_proven,
+            body.claim_len, body.claim_sha256,
+        )
+    except Exception:
+        log.exception("request_audit write failed")
+    return {"ok": True}
 
 
 @app.get("/internal/quota")

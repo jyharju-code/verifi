@@ -21,6 +21,7 @@ import {
   admissionRoute,
   isWallet,
   WALLET_ADDRESS_ERROR,
+  auditRequest,
 } from './routes/verify.js';
 
 const PORT = Number(process.env.PORT ?? 8702);
@@ -48,6 +49,12 @@ app.set('trust proxy', 1);
 app.use(express.json({ limit: '32kb' }));
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
+
+// Audit every admission and unlock request, including the 402 challenges that
+// let an agent test the payment path. Registered first on each route so the
+// finish hook is attached before any handler can respond.
+app.post('/verify', auditRequest('/verify'));
+app.post('/verify-unlock', auditRequest('/verify-unlock'));
 
 // Admission preflight decides which gate a request goes through. It answers
 // only what it can answer from the wallet's own quota, and everything else
@@ -92,9 +99,19 @@ app.post('/verify-unlock', async (req, res, next) => {
   if (!UUID_RE.test(id)) {
     return res.status(400).json({ error: 'pass the verify id as ?id=<uuid>' });
   }
+  if (req.auditContext) req.auditContext.verify_id = id;
   const { status, body } = await getVerify(id);
   if (status === 404) return res.status(404).json({ error: 'verify not found' });
   if (status !== 200) return res.status(502).json({ error: 'verification backend unavailable' });
+  if (req.auditContext) {
+    req.auditContext.verify_no = body.verify_no ?? null;
+    req.auditContext.agent_id = body.agent_id ?? null;
+    req.auditContext.admission_source = body.entry_source ?? null;
+    // The unlock gate always costs 2.90 USDC and is settled by a fresh x402
+    // signature, so a completed unlock proves wallet control. A full-free
+    // legacy unlock does not.
+    req.auditContext.wallet_ownership_proven = body.entry_source !== 'initial_free';
+  }
   const publicStatus = agentStatus(body);
   if (publicStatus === 'completed') return res.json(publicView(body));
   if (publicStatus !== 'ready') {

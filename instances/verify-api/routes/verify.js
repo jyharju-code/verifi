@@ -7,6 +7,7 @@
  * Every POST returns a durable id and every result is retrieved by polling.
  */
 import { Router } from 'express';
+import crypto from 'node:crypto';
 
 export const verifyRouter = Router();
 
@@ -50,6 +51,115 @@ export async function coreFetch(path, options = {}) {
   const resp = await fetch(`${CORE_API}${path}`, { ...options, headers });
   const body = await resp.json().catch(() => ({}));
   return { status: resp.status, body };
+}
+
+// ---------------------------------------------------------------------------
+// Request audit. One durable row per /verify and /verify-unlock request, keyed
+// by the nginx request id, written best-effort so it never breaks a response.
+// Only safe, redacted fields leave this process: never a body, a claim or
+// intent text, a full callback URL, or any secret header. The claim is reduced
+// to its length and sha256 only.
+// ---------------------------------------------------------------------------
+
+function auditClientContext(req) {
+  return {
+    request_id: req.get('x-request-id') || null,
+    client_ip: req.get('x-real-ip') || null,
+    forwarded_for: (req.get('x-forwarded-for') || '').slice(0, 512) || null,
+    forwarded_trusted: req.get('x-forwarded-trusted') === '1',
+    user_agent: (req.get('user-agent') || '').slice(0, 512) || null,
+    // Only the internal MCP server may claim source mcp; nginx forces rest on
+    // every request that arrives through the public edge.
+    source: req.get('x-verifi-source') === 'mcp' ? 'mcp' : 'rest',
+  };
+}
+
+function callbackHost(url) {
+  if (typeof url !== 'string' || !url) return null;
+  try { return new URL(url).hostname.slice(0, 255); } catch { return null; }
+}
+
+function claimDigest(claim) {
+  if (typeof claim !== 'string' || !claim) return { claim_len: null, claim_sha256: null };
+  return {
+    claim_len: claim.length,
+    claim_sha256: crypto.createHash('sha256').update(claim).digest('hex'),
+  };
+}
+
+function outcomeFromStatus(status) {
+  if (status === 202) return 'admitted';
+  if (status === 200) return 'completed';
+  if (status === 402) return 'payment_required';
+  if (status === 429) return 'rejected_active';
+  if (status === 503) return 'unavailable';
+  if (status === 409) return 'conflict';
+  if (status === 404) return 'not_found';
+  if (status >= 500) return 'error';
+  if (status >= 400) return 'bad_request';
+  return 'ok';
+}
+
+export async function postRequestAudit(fields) {
+  try {
+    await coreFetch('/internal/request-audit', { method: 'POST', body: JSON.stringify(fields) });
+  } catch (err) {
+    console.error('request audit post failed:', err.message);
+  }
+}
+
+// Express middleware. Attaches a finish hook that writes exactly one audit row
+// once the final status is known. Handlers enrich req.auditContext with the
+// fields only they can know (verify_id, funding, outcome, proof of ownership).
+export function auditRequest(route) {
+  return (req, res, next) => {
+    const ctx = auditClientContext(req);
+    // The MCP server may name the route after its tool, but only a genuine mcp
+    // source may: nginx forces the source to rest on the public edge, so a
+    // public caller cannot forge either the source or this route override.
+    const effectiveRoute = (ctx.source === 'mcp' && req.get('x-verifi-route'))
+      ? String(req.get('x-verifi-route')).slice(0, 200)
+      : route;
+    req.auditContext = { route: effectiveRoute, ...ctx };
+    let written = false;
+    const write = () => {
+      if (written) return;
+      written = true;
+      const a = req.auditContext;
+      const digest = a.claim_len != null
+        ? { claim_len: a.claim_len, claim_sha256: a.claim_sha256 }
+        : claimDigest(req.body?.claim);
+      const bodyAgent = typeof req.body?.agent_id === 'string'
+        ? req.body.agent_id.slice(0, 100) : null;
+      postRequestAudit({
+        source: a.source,
+        request_id: a.request_id,
+        route: a.route,
+        client_ip: a.client_ip,
+        forwarded_for: a.forwarded_for,
+        forwarded_trusted: a.forwarded_trusted,
+        user_agent: a.user_agent,
+        agent_id: a.agent_id ?? bodyAgent,
+        verify_id: a.verify_id ?? null,
+        verify_no: a.verify_no ?? null,
+        callback_host: a.callback_host ?? callbackHost(req.body?.callback_url),
+        admission_source: a.admission_source ?? null,
+        http_status: res.statusCode,
+        payment_required: res.statusCode === 402,
+        funding_state: a.funding_state ?? null,
+        outcome: a.outcome ?? outcomeFromStatus(res.statusCode),
+        // The x402 middleware verifies the payment signature before the route
+        // runs, so an x402 admission is the only cryptographic proof that the
+        // caller controls the wallet. A free-form agent_id is never proof.
+        wallet_ownership_proven: a.wallet_ownership_proven ?? (req.admissionMode === 'x402'),
+        claim_len: digest.claim_len,
+        claim_sha256: digest.claim_sha256,
+      });
+    };
+    res.once('finish', write);
+    res.once('close', write);
+    next();
+  };
 }
 
 export async function quotaFor(agentId) {
@@ -228,6 +338,7 @@ export async function handleVerify(req, res) {
       agent_id: agentId,
       admission_mode: req.admissionMode,
       callback_url: callbackUrl ?? null,
+      request_id: req.auditContext?.request_id ?? null,
     }),
   });
   if (create.status === 402) {
@@ -261,6 +372,18 @@ export async function handleVerify(req, res) {
   if (req.admissionMode === 'x402') {
     const id = create.body.id;
     recordSettlementOnFinish(res, 'entry', () => id);
+  }
+
+  if (req.auditContext) {
+    const entrySource = create.body.entry_source ?? null;
+    req.auditContext.verify_id = create.body.id ?? null;
+    req.auditContext.verify_no = create.body.verify_no ?? null;
+    req.auditContext.admission_source = entrySource;
+    req.auditContext.funding_state = req.admissionMode === 'x402'
+      ? 'x402_paid'
+      : (entrySource === 'failure_credit' ? 'credit' : 'entitlement');
+    req.auditContext.outcome = 'admitted';
+    req.auditContext.wallet_ownership_proven = req.admissionMode === 'x402';
   }
 
   res.set('Retry-After', String(RETRY_AFTER_S));

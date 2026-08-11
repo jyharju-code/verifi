@@ -19,6 +19,12 @@ import httpx
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import CallToolResult, TextContent
 
+try:
+    from mcp.server.fastmcp.server import get_http_headers
+except Exception:  # pragma: no cover - older or newer SDK layout
+    def get_http_headers() -> dict:
+        return {}
+
 VERIFY_API = os.environ.get("VERIFY_API_URL", "http://verify-api:8702")
 MCP_PORT = int(os.environ.get("MCP_PORT", "8704"))
 MCP_CONTRACT_VERSION = "2.0.0"
@@ -58,6 +64,34 @@ def _decode_payment_required(value: str | None) -> dict | None:
         return json.loads(base64.b64decode(padded).decode("utf-8"))
     except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
         return None
+
+
+def _mcp_call_headers(tool: str, signature: str | None) -> dict:
+    """Headers for a verify-api call from the MCP server.
+
+    X-Verifi-Source: mcp tags the request so verify-api writes the audit row
+    with source mcp and route = the tool name. nginx forces X-Verifi-Source to
+    rest on the public edge, so a public caller can never forge this. The nginx
+    request id, client ip, and raw forwarded chain are forwarded best effort so
+    the audit row and the verify row share the same request_id as the nginx
+    /mcp access log line.
+    """
+    headers = {"X-Verifi-Source": "mcp", "X-Verifi-Route": tool}
+    if signature:
+        headers["PAYMENT-SIGNATURE"] = signature
+    try:
+        incoming = get_http_headers() or {}
+    except Exception:
+        incoming = {}
+    if incoming.get("x-request-id"):
+        headers["X-Request-ID"] = incoming["x-request-id"][:128]
+    if incoming.get("x-real-ip"):
+        headers["X-Real-IP"] = incoming["x-real-ip"][:64]
+    if incoming.get("x-forwarded-for"):
+        headers["X-Forwarded-For"] = incoming["x-forwarded-for"][:512]
+    if incoming.get("x-forwarded-trusted") == "1":
+        headers["X-Forwarded-Trusted"] = "1"
+    return headers
 
 
 def _payment_from_context(ctx: Context | None) -> dict | None:
@@ -143,7 +177,7 @@ async def verify_claim(
     If ready, call unlock_verify. Only one active verify per agent_id at a time.
     """
     signature = payment_signature or _encode_payment_signature(_payment_from_context(ctx))
-    headers = {"PAYMENT-SIGNATURE": signature} if signature else {}
+    headers = _mcp_call_headers("verify_claim", signature)
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             f"{VERIFY_API}/verify",
@@ -180,7 +214,7 @@ async def unlock_verify(
     manually. Never pass a private key.
     """
     signature = payment_signature or _encode_payment_signature(_payment_from_context(ctx))
-    headers = {"PAYMENT-SIGNATURE": signature} if signature else {}
+    headers = _mcp_call_headers("unlock_verify", signature)
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             f"{VERIFY_API}/verify-unlock",
