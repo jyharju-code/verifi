@@ -15,7 +15,7 @@ This is the fix, so the next external visit is fully recorded.
    client (`real_client`), the raw untrusted `xff`, whether the peer was a
    trusted proxy, host, method, path (`$uri`, never the query), status, bytes
    in and out, request and upstream time, upstream address and status, TLS
-   version, user agent, referer.
+   version, user agent, and referer without its query string.
 
 2. **`request_audit` table** in PostgreSQL, one row per money- or human-facing
    request (`rest` /verify and /verify-unlock, `mcp` tool calls, `website`
@@ -54,10 +54,10 @@ claim is reduced to `claim_len` and `claim_sha256`; the real claim stays in the
 IP addresses are personal data. The host logs rotate daily, keep **30 days**,
 are compressed, and are created `0640 root:adm`, so only root and the `adm`
 group can read them (`deploy/logrotate/verifi-nginx`). After rotation nginx is
-told to reopen its files. The `request_audit` table holds `client_ip` and
-should be pruned on the same 30 day horizon by the operator; a scheduled
-`DELETE FROM request_audit WHERE at < now() - interval '30 days'` satisfies
-this. Review whether the privacy policy needs to mention IP retention.
+told to reopen its files. The core API deletes `request_audit` rows older than
+30 days at startup and once per day. The limit is capped at 30 days in code,
+even if `REQUEST_AUDIT_RETENTION_DAYS` is configured higher. Review whether
+the privacy policy needs to mention IP retention.
 
 ## Setup and deploy
 
@@ -123,25 +123,26 @@ The nginx log holds the network view (bytes, timing, TLS, user agent); the
 audit table holds the application view (funding, outcome, proof of ownership).
 Join them on `request_id`.
 
-## Production acceptance result (2026-08-11)
+## Production acceptance
 
-Run on the server via `verifi acceptance-logging` (Server ops run 31510647278),
-against the live `https://verifi.cloud`. It spent no money and created no human
-work: the REST and MCP probes were unpaid and stopped at the 402 gate. All ten
-checks passed.
+Run on the server via `verifi acceptance-logging` against the live
+`https://verifi.cloud`. It spends no money and creates no human work: the REST
+and MCP probes are unpaid and stop at the 402 gate. A successful run reports
+these eleven checks:
 
 ```
 PASS: REST response carried X-Request-ID
 PASS: MCP response carried X-Request-ID
 PASS: REST request_id is in the nginx JSON access log
 PASS: REST audit row exists with source=rest
-PASS: rest and mcp rows both present in the last 2 minutes (rest and mcp distinguishable)
+PASS: MCP audit row exists with source=mcp
 PASS: forged X-Forwarded-For was recorded as untrusted
 PASS: access log contains no secret, claim, or intent tokens
 PASS: access log persisted across nginx recreate (28 lines before, 28 after)
 PASS: logrotate config parses
 PASS: log dir permissions are 750
-== Acceptance done: 10 passed, 0 failed ==
+PASS: database audit retention removed rows older than 30 days
+== Acceptance done: 11 passed, 0 failed ==
 ```
 
 This confirms the finish line: logs survive container recreation, REST and MCP

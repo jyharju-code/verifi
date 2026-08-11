@@ -37,7 +37,7 @@ class NginxLogFormatSafety(unittest.TestCase):
             "$http_x_forwarded_for", "$host", "$request_method", "$uri", "$status",
             "$request_length", "$bytes_sent", "$request_time", "$upstream_response_time",
             "$upstream_addr", "$upstream_status", "$ssl_protocol", "$http_user_agent",
-            "$http_referer",
+            "$safe_referer",
         ]:
             self.assertIn(field, NGINX_LOG, f"{field} is required in the access log")
         self.assertIn("escape=json", NGINX_LOG)
@@ -49,6 +49,12 @@ class NginxLogFormatSafety(unittest.TestCase):
         self.assertIn("set_real_ip_from 127.0.0.1", NGINX_LOG)
         # The admin location, which can carry ?token=, must not be logged.
         self.assertIn("access_log off", NGINX_SSL)
+        self.assertIn("error_log /dev/null crit", NGINX_SSL)
+
+    def test_referer_query_is_not_logged(self):
+        self.assertIn("map $http_referer $safe_referer", NGINX_LOG)
+        log_format = NGINX_LOG.split("log_format json_access", 1)[1]
+        self.assertNotIn("$http_referer", log_format)
 
     def test_request_id_is_returned_and_forwarded(self):
         self.assertIn("add_header X-Request-ID $request_id", NGINX_SSL)

@@ -79,6 +79,7 @@ services:
       FREE_COMMISSION_USD: ${FREE_COMMISSION_USD:-0.50}
       MAX_PENDING_TOTAL: ${MAX_PENDING_TOTAL:-25}
       FREE_DAILY_MAX: ${FREE_DAILY_MAX:-0}
+      REQUEST_AUDIT_RETENTION_DAYS: ${REQUEST_AUDIT_RETENTION_DAYS:-30}
       CORE_INTERNAL_SECRET: ${CORE_INTERNAL_SECRET:-}
       # Public addresses only, for balance monitoring and the dashboard.
       # Never pass FACILITATOR_PRIVATE_KEY here: core-api refuses to start

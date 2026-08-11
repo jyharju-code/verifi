@@ -37,6 +37,14 @@ log = logging.getLogger("verifi.core-api")
 # protection. Above this, new verifies get 503 + Retry-After.
 MAX_PENDING_TOTAL = int(os.environ.get("MAX_PENDING_TOTAL", "25"))
 
+# request_audit contains IP addresses and is operational evidence, not a
+# permanent customer record. The privacy limit is deliberately capped at 30
+# days even if an environment variable is accidentally set higher.
+REQUEST_AUDIT_RETENTION_DAYS = min(
+    30,
+    max(1, int(os.environ.get("REQUEST_AUDIT_RETENTION_DAYS", "30"))),
+)
+
 # Shared secret between the instance servers and this core API. The /internal
 # routes settle money and reveal request content, so they must never be trusted
 # on network isolation alone. When set, every /internal request must present it
@@ -436,6 +444,34 @@ async def _gas_watch_loop() -> None:
         await asyncio.sleep(900)
 
 
+async def _prune_request_audit_once() -> str:
+    """Delete expired network-identifying audit rows.
+
+    This is application-managed so the 30 day privacy promise remains true
+    without relying on an operator to remember a manual SQL command.
+    """
+    db = await get_pool()
+    result = await db.execute(
+        """
+        DELETE FROM request_audit
+        WHERE at < now() - ($1 * interval '1 day')
+        """,
+        REQUEST_AUDIT_RETENTION_DAYS,
+    )
+    if result != "DELETE 0":
+        log.info("request audit retention: %s", result)
+    return result
+
+
+async def _request_audit_retention_loop() -> None:
+    while True:
+        try:
+            await _prune_request_audit_once()
+        except Exception:
+            log.exception("request audit retention failed")
+        await asyncio.sleep(86400)
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     from core.webhooks import delivery_loop
@@ -451,11 +487,13 @@ async def lifespan(app: FastAPI):
     webhook_task = asyncio.create_task(delivery_loop())
     reconcile_task = asyncio.create_task(_reconcile_settlements_loop())
     gas_task = asyncio.create_task(_gas_watch_loop())
+    retention_task = asyncio.create_task(_request_audit_retention_loop())
     yield
     task.cancel()
     webhook_task.cancel()
     reconcile_task.cancel()
     gas_task.cancel()
+    retention_task.cancel()
     await close_pool()
 
 

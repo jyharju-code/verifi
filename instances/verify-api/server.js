@@ -2,8 +2,8 @@
  * Verify API with two explicit gates for one verification chain.
  *
  * POST /verify costs 0.10 USDC and only then enters the human queue.
- * POST /verify-unlock costs 2.90 USDC after the result is ready. The first
- * five chains per wallet use a full-free entitlement at both gates.
+ * POST /verify-unlock costs 2.90 USDC after the result is ready. There is no
+ * free human work; legacy full-free rows can still finish their old chains.
  */
 import express from 'express';
 import { paymentMiddleware, x402ResourceServer, RouteConfigurationError } from '@x402/express';
@@ -107,10 +107,9 @@ app.post('/verify-unlock', async (req, res, next) => {
     req.auditContext.verify_no = body.verify_no ?? null;
     req.auditContext.agent_id = body.agent_id ?? null;
     req.auditContext.admission_source = body.entry_source ?? null;
-    // The unlock gate always costs 2.90 USDC and is settled by a fresh x402
-    // signature, so a completed unlock proves wallet control. A full-free
-    // legacy unlock does not.
-    req.auditContext.wallet_ownership_proven = body.entry_source !== 'initial_free';
+    // Looking up a paid verify proves nothing about the caller of this unlock
+    // attempt. Ownership becomes true only after this request passes x402.
+    req.auditContext.wallet_ownership_proven = false;
   }
   const publicStatus = agentStatus(body);
   if (publicStatus === 'completed') return res.json(publicView(body));
@@ -210,6 +209,10 @@ if (X402_PAY_TO) {
       resourceServer,
     ),
     (req, res) => {
+      // This handler runs only after the current unlock request's x402
+      // signature has been verified. A previous paid entry is not proof that
+      // an unauthenticated caller controls the wallet.
+      if (req.auditContext) req.auditContext.wallet_ownership_proven = true;
       recordSettlementOnFinish(res, 'unlock', () => req.unlockVerifyId);
       // x402 buffers this body and only releases it after settlement succeeds.
       // It is therefore safe to include the result here before the finish
