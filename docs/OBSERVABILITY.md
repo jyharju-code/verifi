@@ -122,3 +122,29 @@ grep '"request_id":"<request_id>"' /var/log/verifi/nginx/access.json.log
 The nginx log holds the network view (bytes, timing, TLS, user agent); the
 audit table holds the application view (funding, outcome, proof of ownership).
 Join them on `request_id`.
+
+## Production acceptance result (2026-08-11)
+
+Run on the server via `verifi acceptance-logging` (Server ops run 31510647278),
+against the live `https://verifi.cloud`. It spent no money and created no human
+work: the REST and MCP probes were unpaid and stopped at the 402 gate. All ten
+checks passed.
+
+```
+PASS: REST response carried X-Request-ID
+PASS: MCP response carried X-Request-ID
+PASS: REST request_id is in the nginx JSON access log
+PASS: REST audit row exists with source=rest
+PASS: rest and mcp rows both present in the last 2 minutes (rest and mcp distinguishable)
+PASS: forged X-Forwarded-For was recorded as untrusted
+PASS: access log contains no secret, claim, or intent tokens
+PASS: access log persisted across nginx recreate (28 lines before, 28 after)
+PASS: logrotate config parses
+PASS: log dir permissions are 750
+== Acceptance done: 10 passed, 0 failed ==
+```
+
+This confirms the finish line: logs survive container recreation, REST and MCP
+are distinguishable, requests correlate to their audit rows by request_id, no
+secret is logged, and a forged forwarded header is not trusted. Re-run any time
+with `verifi acceptance-logging`.
