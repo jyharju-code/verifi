@@ -19,8 +19,13 @@ on:
         options:
           - status
           - deploy
+          - deploy nginx
+          - restart nginx
           - payments-setup
+          - logging-setup
+          - acceptance-logging
           - logs verify-api
+          - logs nginx
           - logs facilitator
           - logs core-api
   push:
