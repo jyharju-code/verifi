@@ -95,7 +95,13 @@ class McpPaymentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.structuredContent["x402Version"], 2)
         self.assertEqual(result.structuredContent["accepts"][0]["amount"], "100000")
         self.assertEqual(result.structuredContent["paymentRequiredHeader"], requirement)
-        self.assertEqual(calls[0][1]["headers"], {})
+        # The call to verify-api is tagged as an MCP-sourced request so its
+        # audit row is source mcp, routed by tool name. No payment yet, so no
+        # PAYMENT-SIGNATURE.
+        self.assertEqual(
+            calls[0][1]["headers"],
+            {"X-Verifi-Source": "mcp", "X-Verifi-Route": "verify_claim"},
+        )
 
     async def test_entry_forwards_standard_mcp_payment_and_returns_receipt(self):
         calls = []
@@ -130,7 +136,11 @@ class McpPaymentTests(unittest.IsolatedAsyncioTestCase):
         ).decode()
         self.assertEqual(
             calls[0][1]["headers"],
-            {"PAYMENT-SIGNATURE": expected_signature},
+            {
+                "X-Verifi-Source": "mcp",
+                "X-Verifi-Route": "verify_claim",
+                "PAYMENT-SIGNATURE": expected_signature,
+            },
         )
 
     async def test_entry_forwards_callback_url_to_verify_api(self):
@@ -187,7 +197,11 @@ class McpPaymentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.structuredContent["status"], "processing")
         self.assertEqual(
             calls[0][1]["headers"],
-            {"PAYMENT-SIGNATURE": "manual-signed-authorization"},
+            {
+                "X-Verifi-Source": "mcp",
+                "X-Verifi-Route": "verify_claim",
+                "PAYMENT-SIGNATURE": "manual-signed-authorization",
+            },
         )
 
 

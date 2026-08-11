@@ -183,6 +183,10 @@ services:
       - ./nginx/html:/var/www/verifi:ro
       - certbot-etc:/etc/letsencrypt
       - certbot-web:/var/www/certbot
+      # Persist access.json.log and error.log on the host so they survive
+      # container recreation. The host dir and its rotation are created by
+      # `verifi logging-setup` (see scripts/verifi-ops.sh, docs/OBSERVABILITY.md).
+      - ${NGINX_LOG_DIR:-/var/log/verifi/nginx}:/var/log/nginx
     depends_on:
       - core-api
       - verify-api

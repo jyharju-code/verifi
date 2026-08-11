@@ -9,3 +9,4 @@
 \i core/db/associates.sql
 \i core/db/verifies.sql
 \i core/db/audit.sql
+\i core/db/request_audit.sql
