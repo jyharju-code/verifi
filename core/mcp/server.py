@@ -19,12 +19,6 @@ import httpx
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import CallToolResult, TextContent
 
-try:
-    from mcp.server.fastmcp.server import get_http_headers
-except Exception:  # pragma: no cover - older or newer SDK layout
-    def get_http_headers() -> dict:
-        return {}
-
 VERIFY_API = os.environ.get("VERIFY_API_URL", "http://verify-api:8702")
 MCP_PORT = int(os.environ.get("MCP_PORT", "8704"))
 MCP_CONTRACT_VERSION = "2.0.0"
@@ -66,7 +60,7 @@ def _decode_payment_required(value: str | None) -> dict | None:
         return None
 
 
-def _mcp_call_headers(tool: str, signature: str | None) -> dict:
+def _mcp_call_headers(tool: str, signature: str | None, ctx: Context | None) -> dict:
     """Headers for a verify-api call from the MCP server.
 
     X-Verifi-Source: mcp tags the request so verify-api writes the audit row
@@ -79,9 +73,13 @@ def _mcp_call_headers(tool: str, signature: str | None) -> dict:
     headers = {"X-Verifi-Source": "mcp", "X-Verifi-Route": tool}
     if signature:
         headers["PAYMENT-SIGNATURE"] = signature
+    # MCP 1.29 carries the originating Starlette Request on the injected
+    # Context. An older helper called get_http_headers no longer exists, and
+    # silently falling back to an empty dict broke request_id correlation.
     try:
-        incoming = get_http_headers() or {}
-    except Exception:
+        request = ctx.request_context.request if ctx is not None else None
+        incoming = request.headers if request is not None else {}
+    except (AttributeError, ValueError):
         incoming = {}
     if incoming.get("x-request-id"):
         headers["X-Request-ID"] = incoming["x-request-id"][:128]
@@ -177,7 +175,7 @@ async def verify_claim(
     If ready, call unlock_verify. Only one active verify per agent_id at a time.
     """
     signature = payment_signature or _encode_payment_signature(_payment_from_context(ctx))
-    headers = _mcp_call_headers("verify_claim", signature)
+    headers = _mcp_call_headers("verify_claim", signature, ctx)
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             f"{VERIFY_API}/verify",
@@ -214,7 +212,7 @@ async def unlock_verify(
     manually. Never pass a private key.
     """
     signature = payment_signature or _encode_payment_signature(_payment_from_context(ctx))
-    headers = _mcp_call_headers("unlock_verify", signature)
+    headers = _mcp_call_headers("unlock_verify", signature, ctx)
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             f"{VERIFY_API}/verify-unlock",
