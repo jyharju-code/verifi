@@ -48,11 +48,12 @@ def encoded_requirement(amount):
     return base64.b64encode(json.dumps(payload).encode()).decode()
 
 
-def context_with_payment(payment=None):
+def context_with_payment(payment=None, headers=None):
     extra = {"x402/payment": payment} if payment else {}
     return SimpleNamespace(
         request_context=SimpleNamespace(
             meta=SimpleNamespace(model_extra=extra),
+            request=SimpleNamespace(headers=headers or {}),
         )
     )
 
@@ -142,6 +143,31 @@ class McpPaymentTests(unittest.IsolatedAsyncioTestCase):
                 "PAYMENT-SIGNATURE": expected_signature,
             },
         )
+
+    async def test_entry_forwards_edge_correlation_headers_from_mcp_context(self):
+        calls = []
+        response = FakeResponse(402, {"error": "payment required"})
+        ctx = context_with_payment(headers={
+            "x-request-id": "edge-request-123",
+            "x-real-ip": "203.0.113.7",
+            "x-forwarded-for": "198.51.100.9",
+            "x-forwarded-trusted": "1",
+        })
+        with patch(
+            "core.mcp.server.httpx.AsyncClient",
+            return_value=FakeClient(response, calls),
+        ):
+            await verify_claim(
+                "Review a claim",
+                "The launch date is 22 July",
+                "0x1111111111111111111111111111111111111111",
+                ctx,
+            )
+
+        self.assertEqual(calls[0][1]["headers"]["X-Request-ID"], "edge-request-123")
+        self.assertEqual(calls[0][1]["headers"]["X-Real-IP"], "203.0.113.7")
+        self.assertEqual(calls[0][1]["headers"]["X-Forwarded-For"], "198.51.100.9")
+        self.assertEqual(calls[0][1]["headers"]["X-Forwarded-Trusted"], "1")
 
     async def test_entry_forwards_callback_url_to_verify_api(self):
         calls = []
