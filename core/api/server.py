@@ -983,20 +983,21 @@ class ContactIn(BaseModel):
 
 
 @app.post("/contact")
-async def contact(body: ContactIn, request: Request) -> dict:
+async def contact(body: ContactIn, request: Request | None = None) -> dict:
     """Public contact form (proxied through nginx). Delivers to Telegram."""
-    await create_request_audit(RequestAuditIn(
-        source="website",
-        route="/contact",
-        request_id=request.headers.get("x-request-id"),
-        client_ip=request.headers.get("x-real-ip"),
-        forwarded_for=request.headers.get("x-forwarded-for"),
-        forwarded_trusted=request.headers.get("x-forwarded-trusted") == "1",
-        user_agent=(request.headers.get("user-agent") or "")[:512] or None,
-        http_status=200,
-        payment_required=False,
-        outcome="contact_received",
-    ))
+    if request is not None:
+        await create_request_audit(RequestAuditIn(
+            source="website",
+            route="/contact",
+            request_id=request.headers.get("x-request-id"),
+            client_ip=request.headers.get("x-real-ip"),
+            forwarded_for=request.headers.get("x-forwarded-for"),
+            forwarded_trusted=request.headers.get("x-forwarded-trusted") == "1",
+            user_agent=(request.headers.get("user-agent") or "")[:512] or None,
+            http_status=200,
+            payment_required=False,
+            outcome="contact_received",
+        ))
     if body.company_website:
         await audit("core-api", "contact_spam_filtered", {})
         return {"ok": True, "delivery": "filtered"}
