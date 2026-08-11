@@ -16,11 +16,12 @@ cd /root/verifi
 
 CMD="${SSH_ORIGINAL_COMMAND:-status}"
 case "$CMD" in
-  status|deploy|payments-setup) ;;
+  status|deploy|payments-setup|logging-setup) ;;
+  deploy\ nginx|restart\ nginx) ;;
   logs\ verify-api|logs\ facilitator|logs\ core-api|logs\ bot|logs\ nginx|logs\ postgres|logs\ mcp) ;;
   *)
     echo "refused: '$CMD' is not an allowed remote command"
-    echo "allowed: status, deploy, payments-setup, logs <service>"
+    echo "allowed: status, deploy, deploy nginx, restart nginx, payments-setup, logging-setup, logs <service>"
     exit 1
     ;;
 esac

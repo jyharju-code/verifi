@@ -79,6 +79,19 @@ case "$CMD" in
     ;;
   deploy)
     require_turn
+    # Ensure host logging is set up (idempotent) and the nginx edge config is
+    # valid BEFORE recreating anything. A broken edge config has crashed the
+    # public surface before, so this gate runs on every deploy, including the
+    # automatic deploy on push to main.
+    install -d -m 0750 -o root -g adm /var/log/verifi/nginx 2>/dev/null \
+        || mkdir -p /var/log/verifi/nginx
+    [ -f deploy/logrotate/verifi-nginx ] \
+        && install -m 0644 deploy/logrotate/verifi-nginx /etc/logrotate.d/verifi-nginx 2>/dev/null || true
+    if ! $COMPOSE run --rm --no-deps --entrypoint nginx nginx -t 2>/tmp/verifi-nginx-t; then
+        echo "ABORT: nginx config is invalid, not deploying:"; cat /tmp/verifi-nginx-t
+        audit "deploy_aborted" "{\"reason\": \"nginx_config_invalid\"}"
+        exit 1
+    fi
     audit "deploy_started" "{\"services\": \"${*:-all}\"}"
     $COMPOSE up -d --build "$@"
     audit "deploy_finished" "{\"services\": \"${*:-all}\"}"
@@ -92,6 +105,28 @@ case "$CMD" in
   logs)
     [ $# -ge 1 ] || { echo "Usage: verifi logs <service>"; exit 1; }
     docker logs "verifi-$1-1" --tail "${2:-100}"
+    ;;
+  logging-setup)
+    # Create the host log directory and install nginx log rotation, then
+    # validate the nginx config in a throwaway container BEFORE any recreate,
+    # so a broken edge config can never reach the running nginx. Idempotent.
+    require_turn
+    audit "logging_setup_started" "{}"
+    install -d -m 0750 -o root -g adm /var/log/verifi/nginx
+    install -m 0644 deploy/logrotate/verifi-nginx /etc/logrotate.d/verifi-nginx
+    echo "host log dir /var/log/verifi/nginx and logrotate config installed"
+    logrotate -d /etc/logrotate.d/verifi-nginx >/tmp/verifi-logrotate-check 2>&1 \
+        && echo "logrotate config parses OK" \
+        || { echo "WARNING: logrotate -d reported issues:"; cat /tmp/verifi-logrotate-check; }
+    echo "validating nginx config in a throwaway container..."
+    if $COMPOSE run --rm --no-deps --entrypoint nginx nginx -t; then
+        echo "nginx config OK. Safe to run: verifi deploy nginx  (or verifi restart nginx)."
+        audit "logging_setup_finished" "{\"nginx_config\": \"ok\"}"
+    else
+        echo "FAILED: nginx config is invalid. Not deploying. Fix the config first."
+        audit "logging_setup_failed" "{\"nginx_config\": \"invalid\"}"
+        exit 1
+    fi
     ;;
   env-set)
     require_turn
@@ -197,7 +232,7 @@ case "$CMD" in
     ls -la /root/backups/ | tail -3
     ;;
   *)
-    echo "Verifi ops. Usage: verifi status|turn|deploy|restart|logs|env-set|payments-setup|backup"
+    echo "Verifi ops. Usage: verifi status|turn|deploy|restart|logs|env-set|payments-setup|logging-setup|backup"
     echo "Actor: VERIFI_ACTOR=claude|hermes|juhana. Mutating commands require the turn (verifi turn)."
     exit 1
     ;;

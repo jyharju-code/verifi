@@ -47,7 +47,10 @@ CREATE TABLE IF NOT EXISTS verifies (
     callback_last_attempt TIMESTAMPTZ,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     expires_at          TIMESTAMPTZ NOT NULL DEFAULT (now() + interval '60 minutes'),
-    responded_at        TIMESTAMPTZ
+    responded_at        TIMESTAMPTZ,
+    -- nginx-generated id of the request that created this verify. Ties the row
+    -- to its nginx JSON access log line and its request_audit row.
+    request_id          TEXT
 );
 
 CREATE INDEX IF NOT EXISTS verifies_instance_status_idx ON verifies (instance, status);
@@ -55,6 +58,7 @@ CREATE INDEX IF NOT EXISTS verifies_associate_idx ON verifies (associate_id, cre
 CREATE INDEX IF NOT EXISTS verifies_agent_idx ON verifies (agent_id);
 CREATE INDEX IF NOT EXISTS verifies_tg_msg_idx ON verifies (associate_id, telegram_message_id);
 CREATE INDEX IF NOT EXISTS verifies_wallet_idx ON verifies (instance, lower(agent_id), created_at DESC);
+CREATE INDEX IF NOT EXISTS verifies_request_id_idx ON verifies (request_id);
 CREATE INDEX IF NOT EXISTS verifies_callback_due_idx
     ON verifies (callback_delivered, status)
     WHERE callback_url IS NOT NULL;
