@@ -183,6 +183,18 @@ test('outcome maps the money-relevant statuses', () => {
   assert.equal(outcomeFromStatus(400), 'bad_request');
 });
 
+test('unlock ownership proof belongs to the current paid request', () => {
+  const server = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  assert.match(
+    server,
+    /Looking up a paid verify proves nothing[\s\S]*wallet_ownership_proven = false/,
+  );
+  assert.match(
+    server,
+    /This handler runs only after the current unlock request[\s\S]*wallet_ownership_proven = true/,
+  );
+});
+
 test('code and rendered docs match the canonical contract', () => {
   const contract = JSON.parse(
     readFileSync(new URL('../../../docs/api-contract.json', import.meta.url), 'utf8'),

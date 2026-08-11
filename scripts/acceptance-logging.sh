@@ -49,12 +49,14 @@ if [ -n "$rest_rid" ]; then
         || bad "REST audit row source was '$src' (expected rest)"
 fi
 
-# 4. REST and MCP are distinguishable in the audit table.
-rest_n=$($PSQL "SELECT count(*) FROM request_audit WHERE source='rest' AND at > now() - interval '2 minutes';")
-mcp_n=$($PSQL "SELECT count(*) FROM request_audit WHERE source='mcp' AND at > now() - interval '2 minutes';")
-{ [ "${rest_n:-0}" -ge 1 ] && [ "${mcp_n:-0}" -ge 1 ]; } \
-    && ok "rest and mcp rows both present in the last 2 minutes (rest=$rest_n mcp=$mcp_n)" \
-    || echo "NOTE: rest=$rest_n mcp=$mcp_n in last 2 min (mcp may need a real MCP client)"
+# 4. The exact MCP request id is present in the audit table with source=mcp.
+if [ -n "$mcp_rid" ]; then
+    mcp_src=$($PSQL "SELECT source FROM request_audit WHERE request_id='$mcp_rid' LIMIT 1;")
+    [ "$mcp_src" = "mcp" ] && ok "MCP audit row exists with source=mcp" \
+        || bad "MCP audit row source was '$mcp_src' (expected mcp)"
+else
+    bad "MCP request could not be correlated to an audit row"
+fi
 
 # 5. A forged X-Forwarded-For is not treated as the client address. We send a
 #    public request with a spoofed header; the audit must not trust it.
@@ -87,8 +89,30 @@ after=$(wc -l < "$ACCESS" 2>/dev/null || echo 0)
 logrotate -d /etc/logrotate.d/verifi-nginx >/dev/null 2>&1 \
     && ok "logrotate config parses" || bad "logrotate config failed to parse"
 perms=$(stat -c '%a' "$LOGDIR" 2>/dev/null)
-{ [ "$perms" = "750" ] || [ "$perms" = "700" ] || [ "$perms" = "755" ]; } \
+{ [ "$perms" = "750" ] || [ "$perms" = "700" ]; } \
     && ok "log dir permissions are $perms" || bad "log dir permissions are '$perms'"
+
+# 9. PostgreSQL audit rows containing IP addresses are deleted automatically
+#    after 30 days. Insert one synthetic old row, run the same application
+#    pruning function used by the daily background task, and verify removal.
+$PSQL "INSERT INTO request_audit (at, source, route) VALUES (now() - interval '31 days', 'rest', 'acceptance-retention');"
+docker exec -i verifi-core-api-1 python - >/dev/null 2>&1 <<'PY'
+import asyncio
+
+from core.api.server import _prune_request_audit_once
+from core.db.database import close_pool
+
+
+async def main():
+    await _prune_request_audit_once()
+    await close_pool()
+
+
+asyncio.run(main())
+PY
+old_rows=$($PSQL "SELECT count(*) FROM request_audit WHERE at < now() - interval '30 days';")
+[ "${old_rows:-1}" -eq 0 ] && ok "database audit retention removed rows older than 30 days" \
+    || bad "database audit retention left $old_rows expired row(s)"
 
 echo "== Acceptance done: $pass passed, $fail failed =="
 [ "$fail" -eq 0 ]
