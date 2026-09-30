@@ -59,6 +59,7 @@ class StatusTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["gas_wallet"]["state"], "ok")
         self.assertAlmostEqual(status["gas_wallet"]["eth"], 0.05)
         self.assertAlmostEqual(status["receiving_wallet"]["usdc"], 1.5)
+        self.assertAlmostEqual(status["receiving_wallet"]["eurc"], 1.5)
 
     async def test_empty_gas_reads_low(self):
         status = await self._status(hex(1_000_000_000_000), hex(0))
@@ -105,6 +106,11 @@ class OnChainVerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ok)
         self.assertIn("USDC", detail)
 
+    async def test_mined_eurc_transfer_verifies_as_eurc(self):
+        ok, detail = await self._check({"blockNumber": "0x2e7", "to": wallets.EURC_CONTRACT})
+        self.assertTrue(ok)
+        self.assertEqual(detail, "mined, EURC contract")
+
     async def test_hash_unknown_to_chain_is_rejected(self):
         ok, detail = await self._check(None)
         self.assertFalse(ok)
@@ -126,7 +132,7 @@ class OnChainVerificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_mined_but_wrong_contract_is_flagged_in_detail(self):
         ok, detail = await self._check({"blockNumber": "0x2e7", "to": "0x" + "9" * 40})
         self.assertTrue(ok)
-        self.assertIn("rather than the USDC contract", detail)
+        self.assertIn("rather than a USDC or EURC contract", detail)
 
 
 if __name__ == "__main__":

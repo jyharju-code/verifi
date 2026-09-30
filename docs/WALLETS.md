@@ -165,10 +165,20 @@ domain carried in the payment requirement (`EURC`, version `2`). core-api
 checks at startup that both token contracts still report the configured
 name, version and decimals, and alerts the operator if one does not.
 
-Before switching contract v3 on, confirm that the receiving address accepts
-EURC on Base. An exchange deposit address that lists only USDC on Base may
-not credit an EURC transfer. The receiving wallet row on the dashboard shows
-the USDC balance only; check EURC on the block explorer.
+EURC is offered only when `X402_ASSETS` names it. Before adding it, confirm
+that the receiving address credits EURC on Base. On-chain any address can
+hold EURC, but an exchange deposit address credits only the tokens the
+exchange supports on that network for that address. For a Coinbase deposit
+address, open Receive, pick EURC and the Base network, and check that the
+address shown is the same `X402_PAY_TO`. Then:
+
+```
+verifi env-set X402_ASSETS USDC,EURC
+verifi deploy core-api verify-api
+```
+
+The receiving wallet row on the dashboard shows both the USDC and the EURC
+balance, read from Base.
 
 Responder earnings are kept per token and paid out per token: an EURC chain
 earns EURC, a USDC chain earns USDC, and nothing is converted. `/payouts`

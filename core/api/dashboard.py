@@ -772,12 +772,13 @@ async function refreshWallets() {
     const x = w[key];
     const st = WSTATE[x.state] || WSTATE.unknown;
     const bal = unit === "ETH" ? x.eth : x.usdc;
+    const balText = unit === "ETH" ? fmt(bal, unit) : fmt(bal, "USDC") + "<br>" + fmt(x.eurc, "EURC");
     const addr = x.address
       ? `<a href="${esc(x.explorer)}" target="_blank" rel="noopener noreferrer" title="${esc(x.address)}">` +
         `${esc(x.address.slice(0, 10))}...${esc(x.address.slice(-6))}</a>`
       : `<span class="muted">ei asetettu</span>`;
     return `<tr><td>${esc(x.label)}</td><td>${addr}</td>` +
-      `<td class="num">${fmt(bal, unit)}</td>` +
+      `<td class="num">${balText}</td>` +
       `<td><span class="status"><span class="dot" style="background:${st.color}"></span>` +
       `${st.icon} ${st.fi}</span></td>` +
       `<td class="muted" style="font-size:11px">${esc(x.purpose)}</td></tr>`;

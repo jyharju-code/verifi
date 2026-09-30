@@ -14,7 +14,7 @@ import { createApp } from '../app.js';
 
 export const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 export const EURC = '0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42';
-export const PAY_TO = '0x52251E52336EE476dAd57241252Ad353F874E9c1';
+export const PAY_TO = '0x000000000000000000000000000000000000dEaD';
 export const NETWORK = 'eip155:8453';
 
 export function quote(termsId) {
