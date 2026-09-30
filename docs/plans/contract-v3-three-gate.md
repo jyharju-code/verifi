@@ -1,6 +1,9 @@
 # Contract v3: three gates, euro pricing, EURC. Implementation plan
 
-Status: **plan for approval. No code has been written.**
+Status: **approved 2026-09-30.** Juhana accepted every recommendation in
+section 9. The decisions are recorded in section 12, the reconciliation with the
+spec in section 13, and three new conflicts found in the spec and the discovery
+listings plan in section 14.
 Branch: `feat/contract-v3-three-gate`, in a separate worktree
 (`../verifi-v3`), created from `origin/main` at `b76ec60`. Upstream tracking is
 removed so a bare `git push` cannot reach `main`.
@@ -11,13 +14,9 @@ Prepared 2026-09-30 against the DECISIONS block in the task (D1 to D15).
 
 ## 0. Blockers and housekeeping
 
-**B1. The specification file is missing.** `docs/specs/extension-service-windows.md`
-does not exist in the repo, and `x402-extension-service-windows-DRAFT.md` is not
-on this machine (searched `~`, Desktop, Downloads, Documents, Developer, and
-Spotlight). The task says "exactly as in the spec's Gate 1 example", so the
-object shapes in section 5 below are **provisional**. They use only the field
-names the task names. I will reconcile them with the spec before writing any
-extension code. **Please add the file to `docs/specs/`.**
+**B1. Resolved.** The spec is now at `docs/specs/extension-service-windows.md`.
+Four em and en dashes were replaced with plain punctuation to satisfy the
+repository rule. No wording changed. Section 5 now follows the spec's shapes.
 
 **B2. Local `main` is 10 commits behind `origin/main`**, and it carries your
 uncommitted Potamoi Group Oy footer edits in `deploy/nginx/html/index.html`,
@@ -359,7 +358,7 @@ is rewritten. `audit_log` stays append-only, with new events `terms_quoted`,
 
 ---
 
-## 5. API fields (provisional until the spec is in the repo)
+## 5. API fields (shapes follow the spec, see section 13)
 
 | Where | Field | Change |
 |---|---|---|
@@ -584,3 +583,97 @@ Each step runs the full suite before the next.
 - No load-based or time-of-day pricing (D13).
 - No cancellation endpoint (D7).
 - No change to the queue caps (Q8 only flags them).
+
+---
+
+## 12. Approved decisions (2026-09-30)
+
+Juhana accepted every recommendation in section 9:
+
+| # | Decision |
+|---|---|
+| Q1 | Spec added at `docs/specs/extension-service-windows.md` |
+| Q2 | Earnings = `floor(unlock_amount_atomic * commission / SLA_UNLOCK_EUR)` in the bound asset, commission snapshotted at admission, accrued when the human answers |
+| Q3 | A credit-funded chain binds to the asset of the chain that earned the credit. Credits minted before v3 bind to USDC |
+| Q4 | ECB daily reference rate, with attribution, rate, source and date disclosed in the terms |
+| Q5 | `x-payment-info` currency `EUR` |
+| Q6 | `GRACE_SECONDS=0` disables the grace window |
+| Q7 | `/supported` stays scheme and network only. A startup on-chain token check replaces it |
+| Q8 | Queue caps unchanged, flagged in docs |
+| Q9 | D14 open: a ready result can be unlocked at any time, at its bound price |
+| Q10 | Both deadlines on the card, applied window in the confirmation. No scheduled card edits |
+| Q11 | `accepts` lists USDC first, EURC second |
+| Q12 | Dashboard price field becomes a read-only view of the current terms. The commission stays editable |
+| Q13 | The production smoke accepts either contract during the transition |
+| Q14 | `QUOTE_VALID_SECONDS=600` |
+| Q15 | `/.well-known/x402` is added although it is legacy for the current discovery library |
+
+## 13. Reconciliation with the spec
+
+The implementation follows the spec's `info` object exactly:
+
+```json
+{
+  "version": 1,
+  "terms_id": "...",
+  "terms_valid_until": "...",
+  "windows": { "sla": { "within_seconds": 3600 }, "grace": { "within_seconds": 86400 } },
+  "price_basis": { "currency": "EUR", "admission": "0.10", "sla": "2.90", "grace": "1.45" },
+  "prices": [
+    { "network": "eip155:8453", "asset": "<USDC>", "admission": "...", "sla": "...", "grace": "...",
+      "conversion": { "from": "EUR", "rate": "...", "source": "ECB euro reference rate",
+                      "as_of": "YYYY-MM-DD", "rounding": "up_to_cent" } },
+    { "network": "eip155:8453", "asset": "<EURC>", "admission": "100000", "sla": "2900000", "grace": "1450000" }
+  ],
+  "asset_binding": "admission_asset",
+  "expiry": { "admission_credit": "next_admission" },
+  "cancellation": "none",
+  "status_url_template": "https://verifi.cloud/verify/{work_id}",
+  "unlock_url_template": "https://verifi.cloud/verify-unlock?id={work_id}"
+}
+```
+
+with `schema` from the spec's Appendix A next to `info`.
+
+Where Verifi follows the spec but adds or deviates, and why:
+
+- **No grace window:** `grace` is omitted everywhere, as the spec requires (Q6).
+- **Ready status:** the spec requires `work_id`, `admitted_at`, `ready_at`,
+  `service_window` and `unlock_url`. Verifi adds `work_id` as an alias of
+  `verify_id` and a top-level `unlock_url` next to the existing `unlock.url`.
+  Both are additive, so v2 clients are unaffected.
+- **Order:** the spec's example lists EURC first. The example is not normative,
+  and Verifi lists USDC first for v2 compatibility (Q11). `prices` uses the same
+  order as `accepts`.
+- **`offer-and-receipt`** (SHOULD) is not implemented in this branch.
+- **Discovery metadata for windows** (spec: "Open: field names") is not
+  implemented beyond the bazaar input schema.
+
+## 14. New conflicts found in the spec and the discovery listings plan
+
+These surfaced after approval. None of them blocks the core work, so
+implementation proceeds and these wait for an answer before the docs step.
+
+**N1. The spec says something the code does not do.** Security considerations:
+"Verifi binds both to the requester wallet", meaning the unlock payer and the
+admission payer. The code records `entry_payer` and `unlock_payer` but checks
+neither against `agent_id`. Options:
+
+- (a) correct the spec sentence to "Verifi records both payers";
+- (b) enforce payer equals `agent_id` at both gates for v3 chains. A refusal
+  after the gate costs nothing, but agents that pay from a different wallet than
+  the one they name would be refused, which v2 allows.
+
+Recommendation: (a) now, (b) as a follow-up.
+
+**N2. `x-payment-info` on `POST /verify-unlock`.** The task asks for it. The
+discovery listings plan (item 1.2, step 5) says not to list `/verify-unlock` as
+discoverable: a cold probe without a verify id gets 400 from the pre-check, not
+a 402, so x402scan would probe it and mark it broken. Recommendation:
+`x-payment-info` on `POST /verify` only, with the unlock band (1.45 to 2.90 EUR)
+stated in its description and in the terms.
+
+**N3. Public status of an expired work item.** The spec names the state
+`expired`. Verifi keeps the public status `failed` with
+`failure.reason: "human_timeout"`, so v2 agents that stop on `failed` keep
+working (D15). Recommendation: keep it, and consider allowing it in the spec.
