@@ -21,7 +21,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from core import config, notify, wallets
+from core import config, notify, pricing, wallets
+from core import fx as fx_rates
 from core.audit import audit
 from core.db.database import close_pool, get_pool
 from core.routing import pool as routing_pool
@@ -51,6 +52,17 @@ REQUEST_AUDIT_RETENTION_DAYS = min(
 # in X-Internal-Secret. Empty keeps the isolation-only behaviour for older
 # deployments that have not provisioned the secret on both sides yet.
 CORE_INTERNAL_SECRET = os.environ.get("CORE_INTERNAL_SECRET", "")
+
+# Contract v3 pricing configuration (D12). Loaded once and validated at
+# startup: an invalid window or price setup stops the core API from starting.
+_PRICING: pricing.PricingConfig | None = None
+
+
+def pricing_config() -> pricing.PricingConfig:
+    global _PRICING
+    if _PRICING is None:
+        _PRICING = pricing.load_config()
+    return _PRICING
 
 
 class VerifyIn(BaseModel):
@@ -472,6 +484,84 @@ async def _request_audit_retention_loop() -> None:
         await asyncio.sleep(86400)
 
 
+async def _alert_once_per(event: str, interval_s: int, details: dict, message: str) -> bool:
+    """Audit and tell the operator, at most once per interval.
+
+    The throttle reads the last such event from audit_log, so it survives a
+    restart and cannot spam.
+    """
+    db = await get_pool()
+    age = await db.fetchval(
+        "SELECT EXTRACT(EPOCH FROM (now() - max(at))) FROM audit_log WHERE event = $1", event
+    )
+    if age is not None and float(age) < interval_s:
+        return False
+    await audit("core-api", event, details)
+    if config.ADMIN_TELEGRAM_ID:
+        await notify.send_message(config.ADMIN_TELEGRAM_ID, message)
+    return True
+
+
+async def _fx_once() -> pricing.FxRate | None:
+    """Fetch a new reference rate if one was published, and flag a stale one."""
+    db = await get_pool()
+    rate = await fx_rates.refresh_once(db)
+    if rate is None:
+        await _alert_once_per(
+            "fx_rate_missing", 6 * 3600, {"source": fx_rates.SOURCE},
+            "💱 Verifi has no EUR/USD rate yet, so USDC cannot be quoted. EURC still works.",
+        )
+        return None
+    age_days = await db.fetchval("SELECT current_date - $1::date", rate.as_of)
+    if age_days > fx_rates.STALE_DAYS:
+        await _alert_once_per(
+            "fx_rate_stale", 24 * 3600,
+            {"source": rate.source, "as_of": rate.as_of.isoformat(), "age_days": age_days},
+            f"💱 The latest EUR/USD rate is {age_days} days old ({rate.as_of}). "
+            "USDC is still quoted from it. Check the ECB feed.",
+        )
+    return rate
+
+
+async def _fx_loop() -> None:
+    # Retry quickly until the first rate exists, then once an hour: the ECB
+    # publishes once per working day, and a known date is not stored twice.
+    while True:
+        rate = None
+        try:
+            rate = await _fx_once()
+        except Exception:
+            log.exception("fx refresh failed")
+        await asyncio.sleep(3600 if rate else 300)
+
+
+async def _token_metadata_loop() -> None:
+    """Check each accepted token's EIP-712 name, version and decimals daily."""
+    while True:
+        unknown = False
+        for asset in pricing_config().assets:
+            try:
+                ok, detail = await wallets.check_token_metadata(asset)
+            except Exception:
+                log.exception("token metadata check failed for %s", asset.symbol)
+                ok, detail = None, "check raised"
+            if ok is None:
+                unknown = True
+                log.warning("token metadata not checked: %s", detail)
+            elif ok:
+                log.info("token metadata: %s", detail)
+            else:
+                log.error("TOKEN METADATA MISMATCH: %s", detail)
+                await _alert_once_per(
+                    f"token_metadata_mismatch_{asset.symbol.lower()}", 24 * 3600,
+                    {"asset": asset.symbol, "address": asset.address, "detail": detail},
+                    f"⚠️ {detail}. Payments in {asset.symbol} will fail verification until "
+                    "the configured EIP-712 name, version or decimals are corrected.",
+                )
+            await asyncio.sleep(2)
+        await asyncio.sleep(600 if unknown else 86400)
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     from core.webhooks import delivery_loop
@@ -481,19 +571,28 @@ async def lifespan(app: FastAPI):
     wallets.assert_no_private_keys()
     for problem in wallets.validate_addresses():
         log.warning("wallet configuration: %s", problem)
+    # D12: an invalid window or price configuration refuses to start.
+    cfg = pricing_config()
+    log.info(
+        "pricing: basis %s, admission %s, sla %s within %ss, grace %s, assets %s",
+        cfg.price_basis, cfg.admission, cfg.sla_unlock, cfg.sla_seconds,
+        f"{cfg.grace_unlock} within {cfg.grace_seconds}s" if cfg.grace_enabled else "none",
+        ",".join(a.symbol for a in cfg.assets),
+    )
 
     await get_pool()
-    task = asyncio.create_task(_expire_stale_loop())
-    webhook_task = asyncio.create_task(delivery_loop())
-    reconcile_task = asyncio.create_task(_reconcile_settlements_loop())
-    gas_task = asyncio.create_task(_gas_watch_loop())
-    retention_task = asyncio.create_task(_request_audit_retention_loop())
+    tasks = [
+        asyncio.create_task(_expire_stale_loop()),
+        asyncio.create_task(delivery_loop()),
+        asyncio.create_task(_reconcile_settlements_loop()),
+        asyncio.create_task(_gas_watch_loop()),
+        asyncio.create_task(_request_audit_retention_loop()),
+        asyncio.create_task(_fx_loop()),
+        asyncio.create_task(_token_metadata_loop()),
+    ]
     yield
-    task.cancel()
-    webhook_task.cancel()
-    reconcile_task.cancel()
-    gas_task.cancel()
-    retention_task.cancel()
+    for task in tasks:
+        task.cancel()
     await close_pool()
 
 
@@ -815,6 +914,63 @@ async def get_verify(verify_id: UUID) -> dict:
     if row is None:
         raise HTTPException(status_code=404, detail="verify not found")
     return _row_to_dict(row)
+
+
+def _terms_payload(row, *, valid: bool) -> dict:
+    return {
+        "terms_id": row["terms_id"],
+        "terms": pricing.as_json(row["terms"]),
+        "internal": pricing.as_json(row["internal"]),
+        "valid_until": row["valid_until"].isoformat(),
+        "valid": valid,
+    }
+
+
+@app.get("/internal/terms/current")
+async def terms_current(instance: str = "verify-api") -> dict:
+    """The quote a new 402 advertises. Reused while it is fresh enough."""
+    db = await get_pool()
+    async with db.acquire() as conn:
+        commission = await conn.fetchval(
+            "SELECT associate_commission FROM instances WHERE id = $1", instance
+        )
+        if commission is None:
+            raise HTTPException(status_code=404, detail="unknown instance")
+        rate = await fx_rates.latest_rate(conn)
+        try:
+            row, created = await pricing.current_quote(conn, pricing_config(), rate, commission)
+        except pricing.PricingUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "60"})
+    if created:
+        terms = pricing.as_json(row["terms"])
+        await audit(
+            "core-api",
+            "terms_quoted",
+            {
+                "terms_id": row["terms_id"],
+                "instance": instance,
+                "valid_until": row["valid_until"].isoformat(),
+                "windows": terms["windows"],
+                "price_basis": terms["price_basis"],
+                "prices": terms["prices"],
+            },
+        )
+    return _terms_payload(row, valid=True)
+
+
+@app.get("/internal/terms/{terms_id}")
+async def terms_by_id(terms_id: str) -> dict:
+    """A specific quote, and whether a payment may still be made against it."""
+    if len(terms_id) > 64:
+        raise HTTPException(status_code=404, detail="terms not found")
+    db = await get_pool()
+    row = await db.fetchrow(
+        "SELECT *, valid_until >= now() AS still_valid FROM pricing_terms WHERE terms_id = $1",
+        terms_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="terms not found")
+    return _terms_payload(row, valid=row["still_valid"])
 
 
 class PaymentIn(BaseModel):

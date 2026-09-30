@@ -88,6 +88,18 @@ services:
       FACILITATOR_ADDRESS: ${FACILITATOR_ADDRESS:-}
       BASE_RPC_URL: ${BASE_RPC_URL:-https://mainnet.base.org}
       GAS_LOW_ETH: ${GAS_LOW_ETH:-0.002}
+      # Contract v3 pricing (docs/specs/extension-service-windows.md). The
+      # core builds every quote, so these live here only. Validated at startup.
+      PRICE_BASIS: ${PRICE_BASIS:-EUR}
+      ADMISSION_EUR: ${ADMISSION_EUR:-0.10}
+      SLA_UNLOCK_EUR: ${SLA_UNLOCK_EUR:-2.90}
+      GRACE_UNLOCK_EUR: ${GRACE_UNLOCK_EUR:-1.45}
+      SLA_SECONDS: ${SLA_SECONDS:-3600}
+      GRACE_SECONDS: ${GRACE_SECONDS:-86400}
+      QUOTE_VALID_SECONDS: ${QUOTE_VALID_SECONDS:-600}
+      X402_NETWORK: ${X402_NETWORK:-eip155:8453}
+      X402_ASSETS: ${X402_ASSETS:-USDC,EURC}
+      FX_STALE_DAYS: ${FX_STALE_DAYS:-7}
     command: ["sh", "-c", "python -m core.db.migrate && exec uvicorn core.api.server:app --host 0.0.0.0 --port 8700 --no-access-log"]
 
   bot:

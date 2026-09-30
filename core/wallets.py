@@ -109,6 +109,53 @@ async def _usdc_balance(client: httpx.AsyncClient, address: str) -> float | None
     return _from_hex(result, USDC_DECIMALS)
 
 
+# Selectors for the token reads used by check_token_metadata.
+_SEL_NAME = "0x06fdde03"
+_SEL_VERSION = "0x54fd4d50"
+_SEL_DECIMALS = "0x313ce567"
+
+
+def _abi_string(result: str | None) -> str | None:
+    """Decode a single ABI-encoded string return value."""
+    if not result or not result.startswith("0x"):
+        return None
+    try:
+        raw = bytes.fromhex(result[2:])
+        offset = int.from_bytes(raw[0:32], "big")
+        length = int.from_bytes(raw[offset:offset + 32], "big")
+        return raw[offset + 32: offset + 32 + length].decode("utf-8")
+    except (ValueError, IndexError, UnicodeDecodeError):
+        return None
+
+
+async def check_token_metadata(asset) -> tuple[bool | None, str]:
+    """Compare a configured token's EIP-712 name, version and decimals with the chain.
+
+    x402 settles with an EIP-3009 authorization whose EIP-712 domain uses the
+    name and version from the payment requirement. A wrong value means every
+    payment in that asset fails verification, so a mismatch is worth an alert.
+    Returns (True, ok) on a match, (False, detail) on a mismatch, and
+    (None, detail) when the chain could not be asked, which is not a failure.
+    """
+    async with httpx.AsyncClient(timeout=10) as client:
+        reads = {}
+        for field, selector in (("name", _SEL_NAME), ("version", _SEL_VERSION), ("decimals", _SEL_DECIMALS)):
+            reads[field] = await _rpc(client, "eth_call", [{"to": asset.address, "data": selector}, "latest"])
+            if reads[field] is None:
+                return None, f"could not read {field}() of {asset.symbol}"
+    onchain = {
+        "name": _abi_string(reads["name"]),
+        "version": _abi_string(reads["version"]),
+        "decimals": int(reads["decimals"], 16) if reads["decimals"] else None,
+    }
+    configured = {"name": asset.eip712_name, "version": asset.eip712_version, "decimals": asset.decimals}
+    mismatches = [f"{k} on chain {onchain[k]!r}, configured {configured[k]!r}"
+                  for k in configured if onchain[k] != configured[k]]
+    if mismatches:
+        return False, f"{asset.symbol} {asset.address}: " + "; ".join(mismatches)
+    return True, f"{asset.symbol} matches: {asset.eip712_name} v{asset.eip712_version}, {asset.decimals} decimals"
+
+
 TX_HASH = re.compile(r"^0x[0-9a-fA-F]{64}$")
 
 

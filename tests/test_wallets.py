@@ -76,9 +76,6 @@ class StatusTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(forbidden, flat)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class OnChainVerificationTests(unittest.IsolatedAsyncioTestCase):
     """A recorded settlement must be checkable against Base itself."""
@@ -130,3 +127,7 @@ class OnChainVerificationTests(unittest.IsolatedAsyncioTestCase):
         ok, detail = await self._check({"blockNumber": "0x2e7", "to": "0x" + "9" * 40})
         self.assertTrue(ok)
         self.assertIn("rather than the USDC contract", detail)
+
+
+if __name__ == "__main__":
+    unittest.main()
