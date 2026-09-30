@@ -1,10 +1,12 @@
 /**
- * Agent-facing two-gate Verify API handlers.
+ * Agent-facing Verify API handlers (contract v3).
  *
- * Gate 1 admits a chain to the human queue for 0.10 USDC. Gate 2 unlocks
- * its ready result for 2.90 USDC. There is no free human work; an earned
- * failure credit can cover gate 1 of a later chain, but never gate 2.
- * Every POST returns a durable id and every result is retrieved by polling.
+ * Gate 1 admits a chain to the human queue for the quoted admission price,
+ * in USDC or EURC. Gates 2 and 3 unlock its ready result at the SLA or grace
+ * price decided when the human answered, in the same asset. There is no free
+ * human work; an earned failure credit can cover the admission of a later
+ * chain, but never an unlock. Every POST returns a durable id and every
+ * result is retrieved by polling or a callback.
  */
 import { Router } from 'express';
 import crypto from 'node:crypto';
@@ -251,7 +253,9 @@ export function publicView(v, { forceUnlocked = false } = {}) {
     sla_deadline: v.sla_deadline ?? null,
     grace_deadline: v.grace_deadline ?? null,
     ready_at: v.ready_at ?? null,
-    expires_at: v.expires_at,
+    // A v3 chain's expiry runs from admitted_at; before settlement the row
+    // only holds a placeholder, so report none rather than a wrong time.
+    expires_at: v3 && !v.admitted_at ? null : v.expires_at,
     responded_at: v.responded_at,
     unlocked_at: v.unlocked_at,
     terms: t ?? null,

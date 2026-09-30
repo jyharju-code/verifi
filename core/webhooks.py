@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from core import pricing
+from core import config, pricing
 from core.audit import audit
 from core.db.database import get_pool
 
@@ -84,6 +84,7 @@ def _public_payload(row) -> dict:
         }
         if v3:
             unlock_amount = pricing.atomic_str(row["unlock_amount_atomic"])
+            payload["unlock_url"] = f"{config.PUBLIC_BASE_URL.rstrip('/')}/verify-unlock?id={row['id']}"
             payload["ready_at"] = row["ready_at"].isoformat() if row["ready_at"] else None
             payload["unlock"].update({
                 "network": terms["network"],

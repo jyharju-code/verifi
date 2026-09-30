@@ -155,3 +155,8 @@ test('a v2 chain still unlocks at its fixed USDC price', () => withStack(async (
   const required = decodePaymentRequiredHeader(res.headers.get('payment-required'));
   assert.deepEqual(required.accepts.map((a) => [a.asset, a.amount]), [[USDC, '2900000']]);
 }));
+
+test('before settlement a v3 chain reports no expiry rather than a placeholder', () => {
+  const view = publicView({ ...chain(EURC, { status: 'admission_pending' }), admitted_at: null, expires_at: '2026-10-01T10:00:00+00:00' });
+  assert.equal(view.expires_at, null);
+});

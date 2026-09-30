@@ -32,7 +32,7 @@ mcp = FastMCP(
     stateless_http=True,
     instructions=(
         "Verifi sends your claim to a real human who answers accept, reject, "
-        "or a refined free-text correction. Every chain has two gates. Use "
+        "or a refined free-text correction. Every chain has an admission and one unlock. Use "
         "verify_claim with callback_url, then use unlock_verify when the "
         "callback reports ready. If no callback is available, poll get_verify. "
         "Every chain is paid, priced in euros and payable in USDC or EURC: an "

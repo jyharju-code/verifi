@@ -30,6 +30,7 @@ class WebhookV3Tests(unittest.TestCase):
         self.assertEqual(body["service_window"]["unlock_amount"], "1450000")
         self.assertEqual(body["unlock"]["asset"], EURC)
         self.assertIsNone(body["unlock"]["price_usdc"])
+        self.assertTrue(body["unlock_url"].endswith("/verify-unlock?id=0f3f7d0a-0000-4000-8000-0000000000aa"))
         self.assertNotIn("secret answer", json.dumps(body))
 
     def test_a_usdc_chain_keeps_price_usdc(self):

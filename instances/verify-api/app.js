@@ -59,7 +59,7 @@ function discoveryDeclaration() {
         intent: { type: 'string', minLength: 1, maxLength: 2000, description: 'What the agent wants to do and why it needs a human check.' },
         claim: { type: 'string', minLength: 1, maxLength: 4000, description: 'The statement a human should verify.' },
         agent_id: { type: 'string', pattern: '^0x[0-9a-fA-F]{40}$', description: 'The requester wallet address.' },
-        callback_url: { type: 'string', format: 'uri', pattern: '^https://', maxLength: 2048, description: 'Optional https URL notified when the result is ready or failed. Polling always works.' },
+        callback_url: { type: 'string', pattern: '^https://', maxLength: 2048, description: 'Optional https URL notified when the result is ready or failed. Polling always works.' },
       },
     },
     output: {
