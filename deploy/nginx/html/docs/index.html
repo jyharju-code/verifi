@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-contract-version="2">
+<html lang="en" data-contract-version="3">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -157,23 +157,24 @@
 
 <main id="content">
   <div class="hero">
-    <div class="eyebrow">Contract version 2</div>
+    <div class="eyebrow">Contract version 3</div>
     <h1>Human judgment your agent can <span>call.</span></h1>
-    <p class="lead">Use Verifi through MCP or HTTP. Send the work, receive a callback when the human answer is ready, then unlock the result through a separate second payment.</p>
-    <div class="flow" aria-label="Verifi two-gate price">
-      <div class="flow-step"><b>0.10 USDC</b><span>Gate 1 confirms the request and enters the human queue.</span></div>
+    <p class="lead">Use Verifi through MCP or HTTP. Send the work, receive a callback when the human answer is ready, then unlock the result through a separate second payment. Its price is fixed by when the human answered.</p>
+    <div class="flow" aria-label="Verifi three-gate price">
+      <div class="flow-step"><b>0.10 EUR</b><span>Gate 1, the admission, places the request in the human queue.</span></div>
       <div class="arrow" aria-hidden="true">&rarr;</div>
       <div class="flow-step"><b>Human review</b><span>Receive a callback when the answer is ready or failed. Polling remains a recovery fallback.</span></div>
       <div class="arrow" aria-hidden="true">&rarr;</div>
-      <div class="flow-step"><b>2.90 USDC</b><span>Gate 2 unlocks the verdict and explanation.</span></div>
+      <div class="flow-step"><b>2.90 or 1.45 EUR</b><span>One unlock releases the verdict: 2.90 EUR if the human answered within 60 minutes, 1.45 EUR if later, within 24 hours.</span></div>
     </div>
-    <div class="free-note"><strong>Every verification is paid.</strong> Human time is never free, so both gates are charged on every request. Free without a human: the docs, MCP discovery, and the <code>402</code> response that lets an agent test the connection and read the price. If an admitted, paid request fails, the wallet receives a 0.10 USDC entry credit for its next request.</div>
+    <div class="free-note"><strong>Every verification is paid.</strong> Human time is never free, so every request pays the admission and one unlock. Free without a human: the docs, MCP discovery, the status endpoint, and the <code>402</code> response that lets an agent test the connection and read every price before paying. There is no cancellation. If no human answers within 24 hours, the wallet's next admission is free.</div>
   </div>
 
   <div class="shell">
     <aside aria-label="On this page">
       <strong>On this page</strong>
       <a href="#loop">Required agent loop</a>
+      <a href="#price">Price and windows</a>
       <a href="#mcp">MCP</a>
       <a href="#submit">Submit</a>
       <a href="#callback">Callback</a>
@@ -187,18 +188,72 @@
     <article>
       <section id="loop">
         <div class="eyebrow">Core flow</div>
-        <h2>One request, two gates, one human answer.</h2>
+        <h2>One request, three gates, one human answer.</h2>
         <ol>
           <li>Submit <code>intent</code>, <code>claim</code>, and the requester wallet.</li>
-          <li>If gate 1 requests payment, sign 0.10 USDC and repeat the same action.</li>
+          <li>If gate 1 requests payment, read the terms in <code>extensions["service-windows"]</code>, choose USDC or EURC from <code>accepts</code>, sign the admission, and repeat the same action.</li>
           <li>Store <code>verify_id</code>. Prefer <code>callback_url</code> for ready or failed events.</li>
-          <li>If no callback is available, or delivery fails, poll while status is <code>processing</code>.</li>
+          <li>If no callback is available, or delivery fails, poll while status is <code>processing</code>, waiting at least <code>retry_after_seconds</code>.</li>
           <li>If status is <code>failed</code>, stop and check the entry credit.</li>
-          <li>If status is <code>ready</code>, call the separate unlock action.</li>
-          <li>If gate 2 requests payment, sign 2.90 USDC and repeat the unlock.</li>
+          <li>If status is <code>ready</code>, check <code>service_window</code>, then call the separate unlock action.</li>
+          <li>The unlock requests exactly one payment: the SLA or grace price, in the asset of the admission. Sign it and repeat the unlock.</li>
           <li>Use the answer only when status is <code>completed</code>.</li>
         </ol>
-        <div class="callout"><strong>Human work can take several minutes.</strong> A callback removes the need for an active polling loop. Always persist the ID so the agent can recover with <code>get_verify</code> or <code>GET /verify/{verify_id}</code>. Unanswered work expires after 60 minutes.</div>
+        <div class="callout"><strong>Human work can take minutes or hours.</strong> A callback removes the need for an active polling loop. Always persist the ID so the agent can recover with <code>get_verify</code> or <code>GET /verify/{verify_id}</code>. A request can wait up to 24 hours for its human, so do not impose a short fixed client deadline.</div>
+      </section>
+
+      <section id="price">
+        <div class="eyebrow">Every price before the first payment</div>
+        <h2>Three gates, two windows.</h2>
+        <p>Prices are set in euros and paid on Base mainnet in USDC or EURC. The first <code>402</code> carries every price of the chain, so the agent knows the full cost before it pays anything.</p>
+        <table>
+          <tr><th>Gate</th><th>When</th><th>Price (EUR basis)</th></tr>
+          <tr><td>1. Admission</td><td><code>POST /verify</code></td><td>0.10</td></tr>
+          <tr><td>2. SLA unlock</td><td>The human answered within 60 minutes of admission</td><td>2.90</td></tr>
+          <tr><td>3. Grace unlock</td><td>The human answered later, within 24 hours of admission</td><td>1.45</td></tr>
+        </table>
+        <p>The request enters the human queue only after the admission settlement has been recorded. Both windows start at that moment, <code>admitted_at</code>. The unlock price is fixed by the time of the answer alone, <code>ready_at</code>. A boundary instant belongs to the earlier, higher-priced window. When the agent polls or unlocks does not change the price.</p>
+        <p>The asset of gate 1 binds the chain: the unlock is paid in the same asset on the same network. EURC amounts are the euro prices. USDC amounts are the euro prices converted at the ECB euro reference rate and rounded up to the next cent at the moment of the quote. The conversion is disclosed in the terms and never changes after admission. With 1 EUR = 1.17 USD, a USDC chain costs 0.12, then 3.40 or 1.70.</p>
+        <div class="callout">Rates: ECB euro foreign exchange reference rates, published for information purposes only. Source: European Central Bank.</div>
+        <p>There is no cancellation. Paying the admission is a commitment: a ready result unlocks at the SLA price or at the grace price. A ready result stays unlockable at its fixed price. If no human answers within 24 hours, the chain fails and the wallet's next admission is free.</p>
+        <h3>The terms in the first 402</h3>
+        <p><code>POST /verify</code> without a payment answers <code>402</code>. The <code>PAYMENT-REQUIRED</code> header carries one <code>exact</code> option per asset, USDC first and EURC second, and the terms in the <code>service-windows</code> extension:</p>
+        <pre><code>{
+  "x402Version": 2,
+  "accepts": [
+    { "scheme": "exact", "network": "eip155:8453",
+      "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "amount": "120000",
+      "extra": { "name": "USD Coin", "version": "2", "terms_id": "st_..." } },
+    { "scheme": "exact", "network": "eip155:8453",
+      "asset": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42", "amount": "100000",
+      "extra": { "name": "EURC", "version": "2", "terms_id": "st_..." } }
+  ],
+  "extensions": {
+    "service-windows": {
+      "info": {
+        "version": 1,
+        "terms_id": "st_...",
+        "terms_valid_until": "2026-10-01T09:10:00.000Z",
+        "windows": { "sla": { "within_seconds": 3600 }, "grace": { "within_seconds": 86400 } },
+        "price_basis": { "currency": "EUR", "admission": "0.10", "sla": "2.90", "grace": "1.45" },
+        "prices": [
+          { "network": "eip155:8453", "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "admission": "120000", "sla": "3400000", "grace": "1700000",
+            "conversion": { "from": "EUR", "rate": "1.17", "source": "ECB euro reference rate",
+                            "as_of": "2026-09-30", "rounding": "up_to_cent" } },
+          { "network": "eip155:8453", "asset": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
+            "admission": "100000", "sla": "2900000", "grace": "1450000" }
+        ],
+        "asset_binding": "admission_asset",
+        "expiry": { "admission_credit": "next_admission" },
+        "cancellation": "none",
+        "status_url_template": "https://verifi.cloud/verify/{work_id}",
+        "unlock_url_template": "https://verifi.cloud/verify-unlock?id={work_id}"
+      }
+    }
+  }
+}</code></pre>
+        <p>Amounts are strings in atomic units, 6 decimals for both assets. A quote can be paid until <code>terms_valid_until</code>, about ten minutes. A payment signed against an expired quote is not settled: the answer is a fresh <code>402</code> with fresh terms, and the agent signs again.</p>
       </section>
 
       <section class="feature" id="mcp">
@@ -209,19 +264,21 @@
         <div class="tool-grid">
           <div class="tool"><code>verify_claim</code><span>Submit the request, optionally register a callback, and pass gate 1.</span></div>
           <div class="tool"><code>get_verify</code><span>Poll the request without payment.</span></div>
-          <div class="tool"><code>unlock_verify</code><span>Pass gate 2 and receive the answer.</span></div>
-          <div class="tool"><code>verifi_info</code><span>Read pricing, rules, and service details.</span></div>
+          <div class="tool"><code>unlock_verify</code><span>Pay the SLA or grace unlock and receive the answer.</span></div>
+          <div class="tool"><code>verifi_info</code><span>Read the service rules and the current terms.</span></div>
         </div>
-        <p>For a paid gate, the tool returns the standard x402 requirement understood by x402-aware MCP clients:</p>
+        <p>For a paid gate, the tool returns the standard x402 requirement understood by x402-aware MCP clients, with the terms in <code>extensions</code>:</p>
         <pre><code>{
   "x402Version": 2,
   "accepts": [
-    { "scheme": "exact", "amount": "100000", "network": "eip155:8453" }
+    { "scheme": "exact", "amount": "120000", "network": "eip155:8453", "extra": { "name": "USD Coin" } },
+    { "scheme": "exact", "amount": "100000", "network": "eip155:8453", "extra": { "name": "EURC" } }
   ],
+  "extensions": { "service-windows": { "info": { "terms_id": "st_..." } } },
   "resource": { "url": "mcp://tool/verify_claim" }
 }</code></pre>
         <p>The MCP payment client signs the selected requirement with the requester wallet and repeats the same tool call using <code>x402/payment</code> metadata. A successful call returns <code>x402/payment-response</code> with the settlement receipt. Generic MCP clients can use the optional <code>payment_signature</code> argument instead.</p>
-        <div class="callout"><strong>Never send a private key.</strong> Verifi receives only the signed, single-use x402 authorization. Gate 1 and gate 2 require separate signatures tied to the same <code>verify_id</code>.</div>
+        <div class="callout"><strong>Never send a private key.</strong> Verifi receives only the signed, single-use x402 authorization. The admission and the unlock require separate signatures tied to the same <code>verify_id</code>.</div>
       </section>
 
       <section id="submit">
@@ -232,7 +289,7 @@
           <tr><th>Field</th><th>Type</th><th>Meaning</th></tr>
           <tr><td><code>intent</code></td><td>string, max 2000</td><td>What the agent is trying to do</td></tr>
           <tr><td><code>claim</code></td><td>string, max 4000</td><td>What the human should verify or answer</td></tr>
-          <tr><td><code>agent_id</code></td><td>0x wallet address</td><td>Requester and free-use identity</td></tr>
+          <tr><td><code>agent_id</code></td><td>0x wallet address</td><td>Requester wallet and quota identity</td></tr>
           <tr><td><code>callback_url</code></td><td>HTTPS URL, optional</td><td>Ready or failed notification</td></tr>
         </table>
         <pre><code>curl -X POST https://verifi.cloud/verify \
@@ -243,24 +300,63 @@
     "agent_id": "0xYourWalletAddress",
     "callback_url": "https://your-agent.example/verifi-events"
   }'</code></pre>
-        <p>An admitted request returns HTTP <code>202</code> with <code>status: processing</code>, a durable <code>verify_id</code>, and <code>retry_after_seconds</code>.</p>
+        <p>An admitted request returns HTTP <code>202</code> with <code>status: processing</code>, a durable <code>verify_id</code> (also returned as <code>work_id</code>), <code>contract_version: 3</code>, <code>retry_after_seconds</code>, and the terms bound to the chain:</p>
+        <pre><code>{
+  "verify_id": "a1b2c3d4-0000-4000-8000-000000000000",
+  "work_id": "a1b2c3d4-0000-4000-8000-000000000000",
+  "contract_version": 3,
+  "status": "processing",
+  "next_action": "poll",
+  "retry_after_seconds": 15,
+  "admitted_at": null,
+  "sla_deadline": null,
+  "grace_deadline": null,
+  "terms": {
+    "terms_id": "st_...",
+    "network": "eip155:8453",
+    "asset": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
+    "asset_symbol": "EURC",
+    "admission": "100000", "sla": "2900000", "grace": "1450000",
+    "windows": { "sla": { "within_seconds": 3600 }, "grace": { "within_seconds": 86400 } }
+  },
+  "funding": {
+    "entry_source": "x402",
+    "entry_amount_atomic": "100000",
+    "entry_charged_atomic": "100000",
+    "unlock_amount_atomic": "2900000",
+    "entry_charged_usdc": null
+  }
+}</code></pre>
+        <p>The admission payment settles while the response is sent, so on the <code>202</code> of a paid admission <code>admitted_at</code> and both deadlines are still <code>null</code>. They appear on the first poll. An admission paid with a credit has them at once. The <code>*_usdc</code> funding fields are <code>null</code> on an EURC chain. The atomic amount fields are always present. Until the human answers, <code>unlock_amount_atomic</code> shows the SLA amount, the most the unlock can cost.</p>
         <table>
-          <tr><th>Entry source</th><th>Gate 1</th><th>Gate 2</th></tr>
-          <tr><td><code>initial_free</code></td><td>Free</td><td>Free</td></tr>
-          <tr><td><code>failure_credit</code></td><td>Free</td><td>2.90 USDC</td></tr>
-          <tr><td><code>x402</code></td><td>0.10 USDC</td><td>2.90 USDC</td></tr>
+          <tr><th>Entry source</th><th>Admission</th><th>Unlock</th></tr>
+          <tr><td><code>x402</code></td><td>Paid</td><td>Paid, SLA or grace price</td></tr>
+          <tr><td><code>failure_credit</code></td><td>Free</td><td>Paid, SLA or grace price</td></tr>
+          <tr><td><code>initial_free</code></td><td>Free</td><td>Free (chains from before contract 3 only)</td></tr>
         </table>
       </section>
 
       <section id="callback">
         <div class="eyebrow">Recommended for unattended agents</div>
         <h2>Let Verifi tell your agent when to continue</h2>
-        <p>Pass an HTTPS <code>callback_url</code> with <code>verify_claim</code> or <code>POST /verify</code>. Verifi sends <code>verify.ready</code> when gate 2 can be called, or <code>verify.failed</code> when the chain must stop.</p>
+        <p>Pass an HTTPS <code>callback_url</code> with <code>verify_claim</code> or <code>POST /verify</code>. Verifi sends <code>verify.ready</code> when the unlock can be called, or <code>verify.failed</code> when the chain must stop. A ready callback carries <code>ready_at</code>, <code>service_window</code>, and the unlock price.</p>
         <pre><code>{
   "event": "verify.ready",
   "verify_id": "a1b2c3d4-0000-4000-8000-000000000000",
+  "work_id": "a1b2c3d4-0000-4000-8000-000000000000",
+  "contract_version": 3,
   "status": "ready",
-  "next_action": "unlock"
+  "next_action": "unlock",
+  "unlock_url": "https://verifi.cloud/verify-unlock?id=a1b2c3d4-0000-4000-8000-000000000000",
+  "ready_at": "2026-10-01T09:41:12.000Z",
+  "service_window": {
+    "applied": "sla",
+    "sla_deadline": "2026-10-01T10:00:00.100Z",
+    "grace_deadline": "2026-10-02T09:00:00.100Z",
+    "network": "eip155:8453",
+    "asset": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
+    "unlock_amount": "2900000"
+  }
 }</code></pre>
         <div class="callout"><strong>No active polling loop is required.</strong> Store <code>verify_id</code> before yielding. Verifi makes up to three delivery attempts. Treat the callback as a wake-up signal, then continue with unlock. If delivery fails, recover with <code>get_verify</code> or <code>GET /verify/{verify_id}</code>. The callback never includes the locked human answer.</div>
       </section>
@@ -271,51 +367,75 @@
         <p>Use MCP <code>get_verify</code> or HTTP <code>GET /verify/{verify_id}</code> when no callback is available or as recovery after a delivery failure. Polling never costs money.</p>
         <table>
           <tr><th>Status</th><th>Meaning</th><th>Next action</th></tr>
-          <tr><td><code>processing</code></td><td>A human is working</td><td>Wait for callback, or poll to recover</td></tr>
+          <tr><td><code>processing</code></td><td>Admission is settling or a human is working</td><td>Wait for callback, or poll to recover</td></tr>
           <tr><td><code>ready</code></td><td>The answer exists but is locked</td><td>Call unlock</td></tr>
           <tr><td><code>failed</code></td><td>No answer can be unlocked</td><td>Stop</td></tr>
           <tr><td><code>completed</code></td><td>The answer is visible</td><td>Use the result</td></tr>
         </table>
+        <p>A processing response carries <code>admitted_at</code>, <code>sla_deadline</code>, and <code>grace_deadline</code>, so the agent can plan its polling. <code>expires_at</code> equals the last deadline. A ready response contains no verdict, but it states exactly what the unlock costs and why:</p>
         <pre><code>{
   "verify_id": "a1b2c3d4-0000-4000-8000-000000000000",
+  "work_id": "a1b2c3d4-0000-4000-8000-000000000000",
+  "contract_version": 3,
   "status": "ready",
   "verdict": null,
   "explanation": null,
+  "admitted_at": "2026-10-01T09:00:00.100Z",
+  "ready_at": "2026-10-01T13:12:40.000Z",
+  "service_window": {
+    "applied": "grace",
+    "sla_deadline": "2026-10-01T10:00:00.100Z",
+    "grace_deadline": "2026-10-02T09:00:00.100Z",
+    "network": "eip155:8453",
+    "asset": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
+    "unlock_amount": "1450000"
+  },
   "next_action": "unlock",
+  "unlock_url": "https://verifi.cloud/verify-unlock?id=a1b2c3d4-0000-4000-8000-000000000000",
   "unlock": {
-    "price_usdc": "2.90",
-    "payment_required": true
+    "method": "POST",
+    "price_usdc": null,
+    "payment_required": true,
+    "asset_symbol": "EURC",
+    "amount_atomic": "1450000",
+    "amount_decimal": "1.45",
+    "applied_window": "grace"
   }
 }</code></pre>
+        <p>On a USDC chain <code>unlock.price_usdc</code> is the decimal USDC price, for example <code>"3.40"</code>.</p>
       </section>
 
       <section id="unlock">
-        <div class="eyebrow">Gate 2</div>
+        <div class="eyebrow">Gate 2 or gate 3</div>
         <h2>Unlock the human answer</h2>
-        <p>Use MCP <code>unlock_verify</code> or HTTP <code>POST /verify-unlock?id={verify_id}</code> only after status becomes <code>ready</code>. Every review receives a new 2.90 USDC requirement at this gate. An entry credit never covers it, so the result always costs 2.90 USDC.</p>
+        <p>Use MCP <code>unlock_verify</code> or HTTP <code>POST /verify-unlock?id={verify_id}</code> only after status becomes <code>ready</code>. Before that the endpoint answers <code>409</code> and asks for no payment.</p>
+        <p>The unlock returns exactly one <code>exact</code> requirement: the asset the admission was paid in, at <code>service_window.unlock_amount</code>. Its <code>extensions["service-windows"].info</code> repeats <code>terms_id</code>, <code>applied</code>, <code>admitted_at</code>, and <code>ready_at</code>, so the agent can check the arithmetic against the terms it paid for at admission. Refuse to sign if the asset differs or the amount is higher than the bound amount for the applied window. An admission credit never covers this gate.</p>
         <pre><code>{
   "verify_id": "a1b2c3d4-0000-4000-8000-000000000000",
   "status": "completed",
   "verdict": "refined",
   "explanation": "Use the corrected delivery date: 22 July.",
   "response": "Use the corrected delivery date: 22 July.",
+  "next_action": "done",
   "funding": {
-    "entry_charged_usdc": "0.10",
-    "unlock_charged_usdc": "2.90",
-    "total_charged_usdc": "3.00"
+    "entry_charged_atomic": "100000",
+    "unlock_window": "grace",
+    "unlock_charged_atomic": "1450000",
+    "total_charged_atomic": "1550000"
   }
 }</code></pre>
+        <p>A <code>completed</code> chain returns its result again without a further charge.</p>
         <p>The human verdict is <code>true</code>, <code>false</code>, or <code>refined</code>. A refined free-text answer is returned in <code>explanation</code> and <code>response</code>.</p>
       </section>
 
       <section id="x402">
         <div class="eyebrow">Payment</div>
         <h2>x402 on Base</h2>
-        <p>Both paid gates use x402 v2, scheme <code>exact</code>, USDC on Base mainnet <code>eip155:8453</code>. The buyer needs USDC but no ETH.</p>
+        <p>All gates use x402 v2, scheme <code>exact</code>, on Base mainnet <code>eip155:8453</code>, with USDC (<code>0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913</code>) or EURC (<code>0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42</code>). Both tokens support EIP-3009, and the EIP-712 domain name and version are in each requirement's <code>extra</code>. The buyer needs USDC or EURC but no ETH.</p>
         <p>HTTP returns a base64 <code>PAYMENT-REQUIRED</code> header and accepts the signed authorization in <code>PAYMENT-SIGNATURE</code>. MCP returns a standard <code>PaymentRequired</code> result and accepts the signed payload through <code>x402/payment</code> metadata. Successful settlement returns <code>PAYMENT-RESPONSE</code> over HTTP or <code>x402/payment-response</code> through MCP.</p>
-        <p>The entry and unlock payments are separate EIP-3009 authorizations and separate on-chain settlements connected to the same <code>verify_id</code>.</p>
+        <p>The admission and unlock payments are separate EIP-3009 authorizations and separate on-chain settlements connected to the same <code>verify_id</code>.</p>
         <h3>Automatic HTTP payment with <code>@x402/fetch</code></h3>
-        <p>The x402 client reads the <code>402</code> requirement, creates the EIP-3009 authorization with the requester's wallet, and retries the same request automatically. Install <code>@x402/core</code>, <code>@x402/fetch</code>, <code>@x402/evm</code>, and <code>viem</code>:</p>
+        <p>The x402 client reads the <code>402</code> requirement, creates the EIP-3009 authorization with the requester's wallet, and retries the same request automatically. Without a custom selector it pays with the first option, USDC. Install <code>@x402/core</code>, <code>@x402/fetch</code>, <code>@x402/evm</code>, and <code>viem</code>:</p>
         <pre><code>npm install @x402/core @x402/fetch @x402/evm viem</code></pre>
         <pre><code>import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
@@ -325,6 +445,8 @@ import { privateKeyToAccount } from "viem/accounts";
 const signer = privateKeyToAccount(
   process.env.EVM_PRIVATE_KEY as `0x${string}`
 );
+// To pay in EURC instead, pass a selector:
+// new x402Client((_v, accepts) =&gt; accepts.find((a) =&gt; a.extra?.name === "EURC") ?? accepts[0])
 const client = new x402Client();
 client.register("eip155:*", new ExactEvmScheme(signer));
 const paidFetch = wrapFetchWithPayment(fetch, client);
@@ -341,12 +463,13 @@ const response = await paidFetch("https://verifi.cloud/verify", {
 });
 
 const verify = await response.json();</code></pre>
-        <p>Use the same <code>paidFetch</code> for <code>POST /verify-unlock?id={verify_id}</code>. It handles the separate 2.90 USDC requirement when the callback reports <code>ready</code>. See the <a href="https://docs.x402.org/getting-started/quickstart-for-buyers">official x402 buyer quickstart</a>.</p>
+        <p>Use the same <code>paidFetch</code> for <code>POST /verify-unlock?id={verify_id}</code>. It handles the separate unlock requirement, in the asset of the admission, when the callback reports <code>ready</code>. See the <a href="https://docs.x402.org/getting-started/quickstart-for-buyers">official x402 buyer quickstart</a>.</p>
       </section>
 
       <section id="failure">
         <div class="eyebrow">Fair failure handling</div>
         <h2>Failure and entry credit</h2>
+        <p>A chain nobody answers within 24 hours of admission fails with reason <code>human_timeout</code>:</p>
         <pre><code>{
   "verify_id": "a1b2c3d4-0000-4000-8000-000000000000",
   "status": "failed",
@@ -354,10 +477,11 @@ const verify = await response.json();</code></pre>
   "failure": {
     "reason": "human_timeout",
     "entry_credit_granted": true,
-    "entry_credit_value_usdc": "0.10"
+    "entry_credit": "next_admission",
+    "entry_credit_value_usdc": null
   }
 }</code></pre>
-        <p>The credit is not cash. It covers gate 1 of the same wallet's next request. Gate 2 still costs 2.90 USDC when that next answer is ready.</p>
+        <p>The credit is not cash. It pays only the admission of the same wallet's next request, which is then bound to the same asset as the expired chain. The unlock of that next request still costs the SLA or grace price when its answer is ready. <code>entry_credit_value_usdc</code> is the admission price on a USDC chain and <code>null</code> on an EURC chain.</p>
       </section>
 
       <section id="audit">
@@ -367,12 +491,12 @@ const verify = await response.json();</code></pre>
         <table>
           <tr><th>HTTP status</th><th>Meaning</th></tr>
           <tr><td><code>400</code></td><td>Invalid input or wallet address</td></tr>
-          <tr><td><code>402</code></td><td>This gate requires an x402 payment</td></tr>
-          <tr><td><code>409</code></td><td>The lifecycle action is not currently valid</td></tr>
+          <tr><td><code>402</code></td><td>This gate requires an x402 payment, or the paid quote expired: sign the fresh terms</td></tr>
+          <tr><td><code>409</code></td><td>The lifecycle action is not currently valid, for example unlock before ready, or the paid terms could not be bound</td></tr>
           <tr><td><code>429</code></td><td>The wallet already has an active review</td></tr>
-          <tr><td><code>503</code></td><td>The human queue is full or paid routes are unavailable</td></tr>
+          <tr><td><code>503</code></td><td>The human queue is full, no quote can be issued right now, or paid routes are unavailable. Retry after the advertised delay</td></tr>
         </table>
-        <p>A refused request is never charged. The active-request check runs before payment. Capacity and request validation run after it, because x402 cancels settlement for any <code>4xx</code> or <code>5xx</code> answer, so an unpaid caller always sees a real <code>402</code> first. PostgreSQL records the wallet, request, both prices, both charged amounts, transaction hashes, free uses, credits, lifecycle timestamps, and the append-only audit trail.</p>
+        <p>A refused request is never charged. The active-request check runs before payment. Capacity and request validation run after it, because x402 cancels settlement for any <code>4xx</code> or <code>5xx</code> answer, so an unpaid caller always sees a real <code>402</code> first. The human queue has a hard cap: a full queue answers <code>503</code> after the payment gate, and nothing is charged. PostgreSQL records the wallet, request, every quote and ECB rate used, the bound terms, the applied window, charged amounts in the bound asset, both transaction hashes, free uses, credits, lifecycle timestamps, and the append-only audit trail.</p>
       </section>
     </article>
   </div>

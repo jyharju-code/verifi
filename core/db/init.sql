@@ -7,6 +7,10 @@
 
 \i core/db/instances.sql
 \i core/db/associates.sql
+\i core/db/pricing.sql
 \i core/db/verifies.sql
+\i core/db/wallet_entitlements.sql
+\i core/db/settlement_journal.sql
+\i core/db/earnings.sql
 \i core/db/audit.sql
 \i core/db/request_audit.sql

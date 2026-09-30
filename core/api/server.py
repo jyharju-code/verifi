@@ -13,15 +13,18 @@ import asyncio
 import contextlib
 import hmac
 import ipaddress
+import json
 import logging
 import os
+from decimal import Decimal
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from core import config, notify, wallets
+from core import config, notify, pricing, wallets
+from core import fx as fx_rates
 from core.audit import audit
 from core.db.database import close_pool, get_pool
 from core.routing import pool as routing_pool
@@ -52,6 +55,17 @@ REQUEST_AUDIT_RETENTION_DAYS = min(
 # deployments that have not provisioned the secret on both sides yet.
 CORE_INTERNAL_SECRET = os.environ.get("CORE_INTERNAL_SECRET", "")
 
+# Contract v3 pricing configuration (D12). Loaded once and validated at
+# startup: an invalid window or price setup stops the core API from starting.
+_PRICING: pricing.PricingConfig | None = None
+
+
+def pricing_config() -> pricing.PricingConfig:
+    global _PRICING
+    if _PRICING is None:
+        _PRICING = pricing.load_config()
+    return _PRICING
+
 
 class VerifyIn(BaseModel):
     instance: str = Field(min_length=1, max_length=50)
@@ -62,6 +76,92 @@ class VerifyIn(BaseModel):
     callback_url: str | None = Field(default=None, max_length=2048)
     # nginx request id, for correlation with the access log and request_audit.
     request_id: str | None = Field(default=None, max_length=128)
+    # Contract v3, x402 admissions: the quote the payment matched and the asset
+    # it was made in, read from the verified payment by verify-api.
+    terms_id: str | None = Field(default=None, max_length=64)
+    paid_asset: str | None = Field(default=None, pattern="^0x[0-9a-fA-F]{40}$")
+
+
+def _admit_v3(terms_sql: str) -> str:
+    """SET clause that admits a v3 row. The windows start now, when admission
+    is recorded, not when the request was created (D5).
+
+    terms_sql is the SQL expression holding the bound terms. It must not be
+    the bound_terms column when the same UPDATE also sets that column, because
+    the right-hand side of an UPDATE sees the old row. A missing grace window
+    yields NULL and the item then expires at the SLA deadline. expires_at
+    mirrors the last window, so one expiry query serves v2 and v3 alike.
+    """
+    return f"""
+        admitted_at = now(),
+        sla_deadline = now() + make_interval(secs => ({terms_sql} #>> '{{windows,sla,within_seconds}}')::int),
+        grace_deadline = now() + make_interval(secs => ({terms_sql} #>> '{{windows,grace,within_seconds}}')::int),
+        expires_at = now() + make_interval(secs => COALESCE(
+            {terms_sql} #>> '{{windows,grace,within_seconds}}',
+            {terms_sql} #>> '{{windows,sla,within_seconds}}')::int)
+    """
+
+
+async def _audit_terms_bound(row) -> None:
+    """The binding at admission, as the spec requires it to be recorded."""
+    bound = pricing.as_json(row["bound_terms"])
+    await audit(
+        "core-api",
+        "terms_bound",
+        {
+            "verify_id": str(row["id"]),
+            "verify_no": row["verify_no"],
+            "wallet_address": row["agent_id"],
+            "terms_id": row["terms_id"],
+            "entry_source": row["entry_source"],
+            "network": row["bound_network"],
+            "asset": row["bound_asset"],
+            "asset_symbol": bound.get("asset_symbol"),
+            "admission": bound.get("admission"),
+            "sla": bound.get("sla"),
+            "grace": bound.get("grace"),
+            "conversion": bound.get("conversion"),
+            "admitted_at": _iso(row["admitted_at"]),
+            "sla_deadline": _iso(row["sla_deadline"]),
+            "grace_deadline": _iso(row["grace_deadline"]),
+        },
+    )
+
+
+def _credit_asset(quote: dict, source_asset: str | None) -> str:
+    """Q3: a credit-funded chain binds to the asset of the chain that earned
+    the credit. A credit minted before v3 has no bound asset and binds to
+    USDC, the only asset that existed. If that asset is not offered now, the
+    first offered asset is used."""
+    offered = [p["asset"] for p in quote["terms"]["prices"]]
+    preferred = source_asset or next(
+        (a.address for a in pricing_config().assets if a.symbol == "USDC"), None
+    )
+    for address in offered:
+        if preferred and address.lower() == preferred.lower():
+            return address
+    return offered[0]
+
+
+def _usdc_decimal(atomic_column: str) -> str:
+    """The *_usdc columns stay truthful for USDC chains and read 0 otherwise.
+
+    They are decimal USDC, so an EURC amount must never land in them. The
+    asset-neutral *_atomic columns carry the amount for every asset.
+    """
+    return (
+        "CASE WHEN bound_terms->>'asset_symbol' = 'USDC' "
+        f"THEN {atomic_column} / power(10::numeric, (bound_terms->>'asset_decimals')::int) "
+        "ELSE 0 END"
+    )
+
+
+def _iso(value):
+    return value.isoformat() if value else None
+
+
+def _atomic(value):
+    return pricing.atomic_str(value)
 
 
 class RequestAuditIn(BaseModel):
@@ -139,14 +239,33 @@ def _row_to_dict(row) -> dict:
         "created_at": row["created_at"].isoformat(),
         "expires_at": row["expires_at"].isoformat() if row["expires_at"] else None,
         "responded_at": row["responded_at"].isoformat() if row["responded_at"] else None,
+        # Contract v3. Null on v2 rows.
+        "contract_version": row["contract_version"],
+        "terms_id": row["terms_id"],
+        "bound_terms": pricing.as_json(row["bound_terms"]) if row["bound_terms"] else None,
+        "bound_asset": row["bound_asset"],
+        "bound_network": row["bound_network"],
+        "entry_amount_atomic": _atomic(row["entry_amount_atomic"]),
+        "entry_charged_atomic": _atomic(row["entry_charged_atomic"]),
+        "sla_deadline": _iso(row["sla_deadline"]),
+        "grace_deadline": _iso(row["grace_deadline"]),
+        "ready_at": _iso(row["ready_at"]),
+        "applied_window": row["applied_window"],
+        "unlock_amount_atomic": _atomic(row["unlock_amount_atomic"]),
+        "unlock_charged_atomic": _atomic(row["unlock_charged_atomic"]),
     }
 
 
 async def _expire_stale_once() -> int:
     """Fail timed-out human work.
 
+    A chain expires when expires_at has passed: 60 minutes for v2 chains, the
+    end of the last window for v3 chains. The comparison is strict, so the
+    boundary instant still belongs to the window, as it does for answers.
+
     An x402-paid entry that times out gets one entry-only credit, because a
-    real 0.10 USDC settlement was made. An entitlement-funded entry (a free
+    real entry settlement was made. The credit records the asset it was paid
+    in, and the next chain it admits binds to that asset (Q3). An entitlement-funded entry (a free
     chain or a prior credit) instead releases its entitlement back to the
     wallet: the free use is not lost, and a credit cannot mint a fresh credit,
     which is what previously let an expiring chain regenerate free admissions
@@ -172,7 +291,8 @@ async def _expire_stale_once() -> int:
                     failure_reason = 'human_timeout',
                     failure_credit_granted = (agent_id IS NOT NULL AND entry_source = 'x402')
                 WHERE status = 'pending' AND expires_at < now()
-                RETURNING id, verify_no, instance, agent_id, associate_id, entry_source
+                RETURNING id, verify_no, instance, agent_id, associate_id, entry_source,
+                          contract_version, bound_asset, bound_terms, entry_amount_atomic
                 """
             )
             for r in rows:
@@ -186,12 +306,17 @@ async def _expire_stale_once() -> int:
                             source_verify_id, details
                         )
                         VALUES ($1, $2, 'failure_credit', true, false, $3,
-                                jsonb_build_object('reason', 'human_timeout'))
+                                jsonb_strip_nulls(jsonb_build_object(
+                                    'reason', 'human_timeout',
+                                    'asset', $4::text,
+                                    'entry_amount_atomic', $5::text)))
                         ON CONFLICT DO NOTHING
                         """,
                         r["instance"],
                         r["agent_id"],
                         r["id"],
+                        r["bound_asset"],
+                        _atomic(r["entry_amount_atomic"]),
                     )
                 else:
                     # initial_free or failure_credit: return the entitlement so
@@ -221,6 +346,7 @@ async def _expire_stale_once() -> int:
     for r in rows:
         log.info("verify #V-%s expired", r["verify_no"])
         credit_granted = bool(r["agent_id"]) and r["entry_source"] == "x402"
+        v3 = r["contract_version"] == 3
         await audit(
             "core-api",
             "verify_failed_credit_granted" if credit_granted else "verify_failed_entitlement_returned",
@@ -229,7 +355,10 @@ async def _expire_stale_once() -> int:
                 "verify_id": str(r["id"]),
                 "wallet_address": r["agent_id"],
                 "entry_source": r["entry_source"],
-                "credit_usdc": "0.10" if credit_granted else "0.00",
+                "contract_version": r["contract_version"],
+                "credit_asset": r["bound_asset"] if v3 else None,
+                "credit_amount_atomic": _atomic(r["entry_amount_atomic"]) if v3 and credit_granted else None,
+                "credit_usdc": None if v3 else ("0.10" if credit_granted else "0.00"),
                 "entitlement_returned": bool(r["agent_id"]) and not credit_granted,
                 "reason": "human_timeout",
             },
@@ -279,7 +408,7 @@ async def _reconcile_settlements_once() -> int:
         try:
             async with db.acquire() as conn:
                 async with conn.transaction():
-                    await _apply_settlement(
+                    row, _, applied_now = await _apply_settlement(
                         conn, j["verify_id"], j["kind"], j["transaction"], j["payer"]
                     )
                     await conn.execute(
@@ -287,6 +416,8 @@ async def _reconcile_settlements_once() -> int:
                         j["id"],
                     )
             done += 1
+            if applied_now and j["kind"] == "entry" and row["contract_version"] == 3:
+                await _audit_terms_bound(row)
             await audit(
                 "core-api",
                 "settlement_reconciled",
@@ -472,6 +603,84 @@ async def _request_audit_retention_loop() -> None:
         await asyncio.sleep(86400)
 
 
+async def _alert_once_per(event: str, interval_s: int, details: dict, message: str) -> bool:
+    """Audit and tell the operator, at most once per interval.
+
+    The throttle reads the last such event from audit_log, so it survives a
+    restart and cannot spam.
+    """
+    db = await get_pool()
+    age = await db.fetchval(
+        "SELECT EXTRACT(EPOCH FROM (now() - max(at))) FROM audit_log WHERE event = $1", event
+    )
+    if age is not None and float(age) < interval_s:
+        return False
+    await audit("core-api", event, details)
+    if config.ADMIN_TELEGRAM_ID:
+        await notify.send_message(config.ADMIN_TELEGRAM_ID, message)
+    return True
+
+
+async def _fx_once() -> pricing.FxRate | None:
+    """Fetch a new reference rate if one was published, and flag a stale one."""
+    db = await get_pool()
+    rate = await fx_rates.refresh_once(db)
+    if rate is None:
+        await _alert_once_per(
+            "fx_rate_missing", 6 * 3600, {"source": fx_rates.SOURCE},
+            "💱 Verifi has no EUR/USD rate yet, so USDC cannot be quoted. EURC still works.",
+        )
+        return None
+    age_days = await db.fetchval("SELECT current_date - $1::date", rate.as_of)
+    if age_days > fx_rates.STALE_DAYS:
+        await _alert_once_per(
+            "fx_rate_stale", 24 * 3600,
+            {"source": rate.source, "as_of": rate.as_of.isoformat(), "age_days": age_days},
+            f"💱 The latest EUR/USD rate is {age_days} days old ({rate.as_of}). "
+            "USDC is still quoted from it. Check the ECB feed.",
+        )
+    return rate
+
+
+async def _fx_loop() -> None:
+    # Retry quickly until the first rate exists, then once an hour: the ECB
+    # publishes once per working day, and a known date is not stored twice.
+    while True:
+        rate = None
+        try:
+            rate = await _fx_once()
+        except Exception:
+            log.exception("fx refresh failed")
+        await asyncio.sleep(3600 if rate else 300)
+
+
+async def _token_metadata_loop() -> None:
+    """Check each accepted token's EIP-712 name, version and decimals daily."""
+    while True:
+        unknown = False
+        for asset in pricing_config().assets:
+            try:
+                ok, detail = await wallets.check_token_metadata(asset)
+            except Exception:
+                log.exception("token metadata check failed for %s", asset.symbol)
+                ok, detail = None, "check raised"
+            if ok is None:
+                unknown = True
+                log.warning("token metadata not checked: %s", detail)
+            elif ok:
+                log.info("token metadata: %s", detail)
+            else:
+                log.error("TOKEN METADATA MISMATCH: %s", detail)
+                await _alert_once_per(
+                    f"token_metadata_mismatch_{asset.symbol.lower()}", 24 * 3600,
+                    {"asset": asset.symbol, "address": asset.address, "detail": detail},
+                    f"⚠️ {detail}. Payments in {asset.symbol} will fail verification until "
+                    "the configured EIP-712 name, version or decimals are corrected.",
+                )
+            await asyncio.sleep(2)
+        await asyncio.sleep(600 if unknown else 86400)
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     from core.webhooks import delivery_loop
@@ -481,19 +690,28 @@ async def lifespan(app: FastAPI):
     wallets.assert_no_private_keys()
     for problem in wallets.validate_addresses():
         log.warning("wallet configuration: %s", problem)
+    # D12: an invalid window or price configuration refuses to start.
+    cfg = pricing_config()
+    log.info(
+        "pricing: basis %s, admission %s, sla %s within %ss, grace %s, assets %s",
+        cfg.price_basis, cfg.admission, cfg.sla_unlock, cfg.sla_seconds,
+        f"{cfg.grace_unlock} within {cfg.grace_seconds}s" if cfg.grace_enabled else "none",
+        ",".join(a.symbol for a in cfg.assets),
+    )
 
     await get_pool()
-    task = asyncio.create_task(_expire_stale_loop())
-    webhook_task = asyncio.create_task(delivery_loop())
-    reconcile_task = asyncio.create_task(_reconcile_settlements_loop())
-    gas_task = asyncio.create_task(_gas_watch_loop())
-    retention_task = asyncio.create_task(_request_audit_retention_loop())
+    tasks = [
+        asyncio.create_task(_expire_stale_loop()),
+        asyncio.create_task(delivery_loop()),
+        asyncio.create_task(_reconcile_settlements_loop()),
+        asyncio.create_task(_gas_watch_loop()),
+        asyncio.create_task(_request_audit_retention_loop()),
+        asyncio.create_task(_fx_loop()),
+        asyncio.create_task(_token_metadata_loop()),
+    ]
     yield
-    task.cancel()
-    webhook_task.cancel()
-    reconcile_task.cancel()
-    gas_task.cancel()
-    retention_task.cancel()
+    for task in tasks:
+        task.cancel()
     await close_pool()
 
 
@@ -592,8 +810,40 @@ async def create_verify(body: VerifyIn) -> dict:
                 detail="one pending verify per agent_id: wait for the previous one to resolve or expire",
             )
 
+    # Contract v3 terms, resolved before the admission transaction so the quote
+    # lock is never held while an associate is being notified.
+    #   x402: bind the quote the verified payment matched, in the asset it was
+    #   made in. Validity was enforced when the payment was matched, so a quote
+    #   that expired a moment ago still binds: the agent paid against it.
+    #   entitlement: a credit-funded admission binds the current quote. Its
+    #   asset is chosen inside the transaction, from the credit's source chain.
+    paid_bound = None
+    paid_commission = None
+    current_quote = None
+    if body.admission_mode == "x402":
+        if not body.terms_id or not body.paid_asset:
+            raise HTTPException(status_code=409, detail="admission terms are missing from the payment")
+        quote = await db.fetchrow(
+            "SELECT terms, internal FROM pricing_terms WHERE terms_id = $1", body.terms_id
+        )
+        if quote is None:
+            raise HTTPException(status_code=409, detail="the paid quote is unknown")
+        internal = pricing.as_json(quote["internal"])
+        paid_bound = pricing.bind_terms(pricing.as_json(quote["terms"]), internal, body.paid_asset)
+        if paid_bound is None:
+            raise HTTPException(status_code=409, detail="the paid asset is not part of the quote")
+        paid_commission = Decimal(internal["responder_commission_eur"])
+    else:
+        try:
+            current_quote = await terms_current(body.instance)
+        except HTTPException as exc:
+            if exc.status_code != 503:
+                raise
+            current_quote = None  # a credit admission refuses below; nothing is consumed
+
     assigned = False
     benefit_kind = None
+    bound_for_audit = None
     async with db.acquire() as conn:
         async with conn.transaction():
             # Serialize admission decisions per wallet. This makes the five
@@ -624,9 +874,12 @@ async def create_verify(body: VerifyIn) -> dict:
                 """
                 INSERT INTO verifies (
                     instance, intent, claim, agent_id, tier, status,
-                    entry_source, callback_url, request_id
+                    entry_source, callback_url, request_id,
+                    contract_version, terms_id, bound_terms, bound_asset, bound_network,
+                    bound_commission_eur, entry_amount_atomic
                 )
-                VALUES ($1, $2, $3, $4, $5, 'admission_pending', $6, $7, $8)
+                VALUES ($1, $2, $3, $4, $5, 'admission_pending', $6, $7, $8,
+                        $9, $10, $11::jsonb, $12, $13, $14, $15)
                 RETURNING *
                 """,
                 body.instance,
@@ -637,6 +890,13 @@ async def create_verify(body: VerifyIn) -> dict:
                 "x402" if body.admission_mode == "x402" else None,
                 body.callback_url,
                 body.request_id,
+                3 if paid_bound else 2,
+                paid_bound["terms_id"] if paid_bound else None,
+                json.dumps(paid_bound) if paid_bound else None,
+                paid_bound["asset"] if paid_bound else None,
+                paid_bound["network"] if paid_bound else None,
+                paid_commission,
+                int(paid_bound["admission"]) if paid_bound else None,
             )
 
             if body.admission_mode == "entitlement":
@@ -735,17 +995,28 @@ async def create_verify(body: VerifyIn) -> dict:
                 else:
                     credit = await conn.fetchrow(
                         """
-                        SELECT id FROM wallet_entitlements
-                        WHERE instance = $1 AND lower(wallet_address) = lower($2)
-                          AND kind = 'failure_credit' AND consumed_by_verify_id IS NULL
-                        ORDER BY granted_at, id
-                        LIMIT 1 FOR UPDATE SKIP LOCKED
+                        SELECT e.id, s.bound_asset AS source_asset
+                        FROM wallet_entitlements e
+                        LEFT JOIN verifies s ON s.id = e.source_verify_id
+                        WHERE e.instance = $1 AND lower(e.wallet_address) = lower($2)
+                          AND e.kind = 'failure_credit' AND e.consumed_by_verify_id IS NULL
+                        ORDER BY e.granted_at, e.id
+                        LIMIT 1 FOR UPDATE OF e SKIP LOCKED
                         """,
                         body.instance,
                         body.agent_id,
                     )
                     if credit is None:
                         raise HTTPException(status_code=402, detail="no free chain or entry credit remains")
+                    if current_quote is None:
+                        # Refused before the credit is consumed, so it is kept.
+                        raise HTTPException(
+                            status_code=503,
+                            detail="pricing is unavailable, retry shortly",
+                            headers={"Retry-After": "60"},
+                        )
+                    asset = _credit_asset(current_quote, credit["source_asset"])
+                    bound = pricing.bind_terms(current_quote["terms"], current_quote["internal"], asset)
                     await conn.execute(
                         """
                         UPDATE wallet_entitlements
@@ -757,14 +1028,24 @@ async def create_verify(body: VerifyIn) -> dict:
                     )
                     benefit_kind = "failure_credit"
                     verify = await conn.fetchrow(
-                        """
+                        f"""
                         UPDATE verifies
-                        SET tier = 'paid', entry_source = 'failure_credit',
-                            status = 'pending', admitted_at = now()
+                        SET tier = 'paid', entry_source = 'failure_credit', status = 'pending',
+                            contract_version = 3, terms_id = $2, bound_terms = $3::jsonb,
+                            bound_asset = $4, bound_network = $5, bound_commission_eur = $6,
+                            entry_amount_atomic = $7, entry_charged_atomic = 0,
+                            {_admit_v3("$3::jsonb")}
                         WHERE id = $1 RETURNING *
                         """,
                         verify["id"],
+                        bound["terms_id"],
+                        json.dumps(bound),
+                        bound["asset"],
+                        bound["network"],
+                        Decimal(current_quote["internal"]["responder_commission_eur"]),
+                        int(bound["admission"]),
                     )
+                    bound_for_audit = verify
 
                 assigned = await _route_admitted_verify(conn, verify)
 
@@ -784,12 +1065,18 @@ async def create_verify(body: VerifyIn) -> dict:
             "agent_id": body.agent_id,
             "admission_mode": body.admission_mode,
             "entry_source": verify["entry_source"],
-            "entry_list_price_usdc": "0.10",
+            "contract_version": verify["contract_version"],
+            "terms_id": verify["terms_id"],
+            "bound_asset": verify["bound_asset"],
+            "entry_amount_atomic": _atomic(verify["entry_amount_atomic"]),
+            "entry_list_price_usdc": "0.10" if verify["contract_version"] == 2 else None,
             "entry_charged_usdc": "0.00",
             "free_use_number": verify["free_use_number"],
             "assigned": assigned,
         },
     )
+    if bound_for_audit is not None:
+        await _audit_terms_bound(bound_for_audit)
     if benefit_kind:
         await audit(
             "core-api",
@@ -817,6 +1104,63 @@ async def get_verify(verify_id: UUID) -> dict:
     return _row_to_dict(row)
 
 
+def _terms_payload(row, *, valid: bool) -> dict:
+    return {
+        "terms_id": row["terms_id"],
+        "terms": pricing.as_json(row["terms"]),
+        "internal": pricing.as_json(row["internal"]),
+        "valid_until": row["valid_until"].isoformat(),
+        "valid": valid,
+    }
+
+
+@app.get("/internal/terms/current")
+async def terms_current(instance: str = "verify-api") -> dict:
+    """The quote a new 402 advertises. Reused while it is fresh enough."""
+    db = await get_pool()
+    async with db.acquire() as conn:
+        commission = await conn.fetchval(
+            "SELECT associate_commission FROM instances WHERE id = $1", instance
+        )
+        if commission is None:
+            raise HTTPException(status_code=404, detail="unknown instance")
+        rate = await fx_rates.latest_rate(conn)
+        try:
+            row, created = await pricing.current_quote(conn, pricing_config(), rate, commission)
+        except pricing.PricingUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "60"})
+    if created:
+        terms = pricing.as_json(row["terms"])
+        await audit(
+            "core-api",
+            "terms_quoted",
+            {
+                "terms_id": row["terms_id"],
+                "instance": instance,
+                "valid_until": row["valid_until"].isoformat(),
+                "windows": terms["windows"],
+                "price_basis": terms["price_basis"],
+                "prices": terms["prices"],
+            },
+        )
+    return _terms_payload(row, valid=True)
+
+
+@app.get("/internal/terms/{terms_id}")
+async def terms_by_id(terms_id: str) -> dict:
+    """A specific quote, and whether a payment may still be made against it."""
+    if len(terms_id) > 64:
+        raise HTTPException(status_code=404, detail="terms not found")
+    db = await get_pool()
+    row = await db.fetchrow(
+        "SELECT *, valid_until >= now() AS still_valid FROM pricing_terms WHERE terms_id = $1",
+        terms_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="terms not found")
+    return _terms_payload(row, valid=row["still_valid"])
+
+
 class PaymentIn(BaseModel):
     kind: str = Field(pattern="^(entry|unlock)$")
     transaction: str = Field(min_length=4, max_length=80)
@@ -828,12 +1172,14 @@ async def _apply_settlement(conn, verify_id, kind: str, transaction: str, payer)
 
     Re-applying the same (verify, kind, transaction) is a no-op that returns
     the current row, so record_payment and the reconciliation loop can both
-    call this safely.
+    call this safely. Returns (row, assigned, applied_now); applied_now is
+    False on such a replay, so callers audit a binding exactly once.
     """
     current = await conn.fetchrow("SELECT * FROM verifies WHERE id = $1 FOR UPDATE", verify_id)
     if current is None:
         raise HTTPException(status_code=404, detail="verify not found")
     assigned = False
+    applied_now = False
     if kind == "entry":
         if current["x402_payment_tx"]:
             if current["x402_payment_tx"] != transaction:
@@ -842,18 +1188,37 @@ async def _apply_settlement(conn, verify_id, kind: str, transaction: str, payer)
         else:
             if current["status"] != "admission_pending" or current["entry_source"] != "x402":
                 raise HTTPException(status_code=409, detail="verify is not awaiting x402 admission")
-            row = await conn.fetchrow(
-                """
-                UPDATE verifies
-                SET x402_payment_tx = $2, entry_payer = COALESCE($3, agent_id),
-                    entry_charged_usdc = 0.10, admitted_at = now(), status = 'pending'
-                WHERE id = $1 RETURNING *
-                """,
-                verify_id,
-                transaction,
-                payer,
-            )
+            if current["contract_version"] == 3:
+                # Admission follows settlement: the windows start now, and the
+                # amount charged is the bound admission amount in the paid asset.
+                row = await conn.fetchrow(
+                    f"""
+                    UPDATE verifies
+                    SET x402_payment_tx = $2, entry_payer = COALESCE($3, agent_id),
+                        status = 'pending',
+                        entry_charged_atomic = entry_amount_atomic,
+                        entry_charged_usdc = {_usdc_decimal("entry_amount_atomic")},
+                        {_admit_v3("bound_terms")}
+                    WHERE id = $1 RETURNING *
+                    """,
+                    verify_id,
+                    transaction,
+                    payer,
+                )
+            else:
+                row = await conn.fetchrow(
+                    """
+                    UPDATE verifies
+                    SET x402_payment_tx = $2, entry_payer = COALESCE($3, agent_id),
+                        entry_charged_usdc = 0.10, admitted_at = now(), status = 'pending'
+                    WHERE id = $1 RETURNING *
+                    """,
+                    verify_id,
+                    transaction,
+                    payer,
+                )
             assigned = await _route_admitted_verify(conn, row)
+            applied_now = True
     else:
         if current["x402_unlock_tx"]:
             if current["x402_unlock_tx"] != transaction:
@@ -866,20 +1231,41 @@ async def _apply_settlement(conn, verify_id, kind: str, transaction: str, payer)
                 raise HTTPException(status_code=409, detail="result is already unlocked")
             if current["entry_source"] == "initial_free":
                 raise HTTPException(status_code=409, detail="free chain must use entitlement unlock")
-            row = await conn.fetchrow(
-                """
-                UPDATE verifies
-                SET x402_unlock_tx = $2, unlock_source = 'x402',
-                    unlock_payer = COALESCE($3, agent_id),
-                    unlock_charged_usdc = 2.90,
-                    result_unlocked = true, unlocked_at = now()
-                WHERE id = $1 RETURNING *
-                """,
-                verify_id,
-                transaction,
-                payer,
-            )
-    return row, assigned
+            if current["contract_version"] == 3:
+                if current["unlock_amount_atomic"] is None:
+                    raise HTTPException(status_code=409, detail="the unlock price was never decided")
+                # The amount was decided once when the answer was recorded.
+                # It is only read here, never recomputed.
+                row = await conn.fetchrow(
+                    f"""
+                    UPDATE verifies
+                    SET x402_unlock_tx = $2, unlock_source = 'x402',
+                        unlock_payer = COALESCE($3, agent_id),
+                        unlock_charged_atomic = unlock_amount_atomic,
+                        unlock_charged_usdc = {_usdc_decimal("unlock_amount_atomic")},
+                        result_unlocked = true, unlocked_at = now()
+                    WHERE id = $1 RETURNING *
+                    """,
+                    verify_id,
+                    transaction,
+                    payer,
+                )
+            else:
+                row = await conn.fetchrow(
+                    """
+                    UPDATE verifies
+                    SET x402_unlock_tx = $2, unlock_source = 'x402',
+                        unlock_payer = COALESCE($3, agent_id),
+                        unlock_charged_usdc = 2.90,
+                        result_unlocked = true, unlocked_at = now()
+                    WHERE id = $1 RETURNING *
+                    """,
+                    verify_id,
+                    transaction,
+                    payer,
+                )
+            applied_now = True
+    return row, assigned, applied_now
 
 
 @app.post("/internal/verifies/{verify_id}/payment")
@@ -904,7 +1290,7 @@ async def record_payment(verify_id: UUID, body: PaymentIn) -> dict:
     )
     async with db.acquire() as conn:
         async with conn.transaction():
-            row, assigned = await _apply_settlement(
+            row, assigned, applied_now = await _apply_settlement(
                 conn, verify_id, body.kind, body.transaction, body.payer
             )
             await conn.execute(
@@ -925,10 +1311,21 @@ async def record_payment(verify_id: UUID, body: PaymentIn) -> dict:
             "transaction": body.transaction,
             "payer": body.payer,
             "wallet_address": row["agent_id"],
-            "amount_usdc": "0.10" if body.kind == "entry" else "2.90",
+            "contract_version": row["contract_version"],
+            "asset": row["bound_asset"],
+            "amount_atomic": _atomic(
+                row["entry_charged_atomic"] if body.kind == "entry" else row["unlock_charged_atomic"]
+            ),
+            "amount_usdc": (
+                ("0.10" if body.kind == "entry" else "2.90") if row["contract_version"] == 2
+                else str(row["entry_charged_usdc"] if body.kind == "entry" else row["unlock_charged_usdc"])
+            ),
+            "applied_window": row["applied_window"] if body.kind == "unlock" else None,
             "assigned": assigned if body.kind == "entry" else None,
         },
     )
+    if applied_now and body.kind == "entry" and row["contract_version"] == 3:
+        await _audit_terms_bound(row)
     return {"ok": True, "verify_no": row["verify_no"], "assigned": assigned}
 
 

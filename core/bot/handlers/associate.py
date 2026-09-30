@@ -2,6 +2,7 @@
 in bot.py for the original operator."""
 import logging
 import re
+from decimal import ROUND_DOWN, Decimal
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -16,8 +17,15 @@ log = logging.getLogger(__name__)
 _EVM_ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
 
 
-def money(amount) -> str:
-    return f"${float(amount):.2f}"
+def amount_in(amount: Decimal, asset: str) -> str:
+    """An amount in its own asset, in whole cents rounded down: never overstated."""
+    return f"{amount.quantize(Decimal('0.01'), rounding=ROUND_DOWN)} {asset}"
+
+
+def per_asset(amounts: dict[str, Decimal]) -> str:
+    """'0.58 USDC, 0.50 EURC', or '0.00' when there is nothing yet."""
+    shown = [amount_in(v, k) for k, v in sorted(amounts.items())]
+    return ", ".join(shown) if shown else "0.00"
 
 
 async def get_associate(telegram_id: int):
@@ -76,7 +84,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Welcome to Verifi! 👋\n\n"
         "Your registration has been received and is waiting for approval.\n\n"
         "Meanwhile you can get ready:\n"
-        "1. Set your USDC address: /address 0x...\n"
+        "1. Set your payout address on Base: /address 0x...\n"
         "   (No wallet yet? Install Rabby Wallet. It takes two minutes.)\n"
         "2. Or choose bank transfer: /payout bank\n\n"
         "Once approved, mark yourself available with /available."
@@ -120,15 +128,18 @@ async def cmd_balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     db = await get_pool()
     async with db.acquire() as conn:
         week = await settlement.week_earnings(conn, assoc["id"])
-    pending = assoc["earnings"] - assoc["paid_total"]
-    await update.message.reply_text(
-        f"💰 Your balance\n\n"
-        f"This week: {money(week)}\n"
-        f"All-time earned: {money(assoc['earnings'])}\n"
-        f"Paid out: {money(assoc['paid_total'])}\n"
-        f"Awaiting payout: {money(pending)}\n\n"
-        f"Verifies: {assoc['total_paid']} paid, {assoc['total_free']} free"
-    )
+        balances = await settlement.balances(conn, assoc["id"])
+    lines = ["💰 Your balance", "", f"This week: {per_asset(week)}"]
+    if not balances:
+        lines.append("Nothing earned yet.")
+    for b in balances:
+        # Each asset is kept and paid out on its own, never converted.
+        lines.append(
+            f"{b.asset}: earned {amount_in(b.earned, b.asset)}, paid {amount_in(b.paid, b.asset)}, "
+            f"awaiting payout {amount_in(b.pending, b.asset)}"
+        )
+    lines += ["", f"Verifies: {assoc['total_paid']} paid, {assoc['total_free']} free"]
+    await update.message.reply_text("\n".join(lines))
 
 
 async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -148,7 +159,7 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     )
     payouts = await db.fetch(
         """
-        SELECT amount, method, created_at
+        SELECT amount, asset, method, created_at
         FROM payouts
         WHERE associate_id = $1
         ORDER BY created_at DESC
@@ -167,8 +178,8 @@ async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not payouts:
         lines.append("  (none yet)")
     for p in payouts:
-        method = "USDC" if p["method"] == "crypto" else "bank transfer"
-        lines.append(f"  {money(p['amount'])} {method} {p['created_at'].strftime('%d.%m.%Y')}")
+        method = "on Base" if p["method"] == "crypto" else "bank transfer"
+        lines.append(f"  {amount_in(p['amount'], p['asset'])} {method} {p['created_at'].strftime('%d.%m.%Y')}")
     await update.message.reply_text("\n".join(lines))
 
 
@@ -190,8 +201,8 @@ async def cmd_address(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.args[0],
     )
     await update.message.reply_text(
-        f"✅ USDC address saved: {context.args[0][:6]}...{context.args[0][-4:]}\n"
-        f"Payout method: USDC on Base."
+        f"✅ Payout address saved: {context.args[0][:6]}...{context.args[0][-4:]}\n"
+        f"Payout method: on Base. Earnings are paid in the asset they were earned in, USDC or EURC."
     )
 
 
@@ -205,9 +216,9 @@ async def cmd_payout_method(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text("Choose a payout method: /payout bank or /payout crypto")
         return
     if method == "crypto" and not assoc["wallet_address"]:
-        await update.message.reply_text("Set your USDC address first: /address 0x...")
+        await update.message.reply_text("Set your payout address first: /address 0x...")
         return
     db = await get_pool()
     await db.execute("UPDATE associates SET payout_method = $2 WHERE id = $1", assoc["id"], method)
-    name = "bank transfer" if method == "bank" else "USDC on Base"
+    name = "bank transfer" if method == "bank" else "USDC or EURC on Base"
     await update.message.reply_text(f"✅ Payout method changed: {name}")

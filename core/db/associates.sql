@@ -40,7 +40,10 @@ CREATE TABLE IF NOT EXISTS payouts (
     method       VARCHAR(10) NOT NULL CHECK (method IN ('crypto', 'bank')),
     tx_reference VARCHAR(200),
     note         TEXT,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- The asset paid out. Earnings are kept per asset and never converted,
+    -- so each payout settles one asset's balance. Rows before v3 are USDC.
+    asset        TEXT NOT NULL DEFAULT 'USDC'
 );
 
 CREATE INDEX IF NOT EXISTS payouts_associate_idx ON payouts (associate_id, created_at DESC);

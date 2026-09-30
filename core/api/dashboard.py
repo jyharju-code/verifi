@@ -13,9 +13,10 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
-from core import config, wallets
+from core import config, pricing, wallets
 from core.audit import audit
 from core.db.database import get_pool
+from core.payments import settlement
 
 log = logging.getLogger("verifi.dashboard")
 
@@ -85,16 +86,36 @@ async def admin_data(request: Request) -> JSONResponse:
         FROM verifies
         """
     )
-    money = await db.fetchrow(
+    # Revenue per asset, never converted: v2 chains in their USDC columns,
+    # v3 chains in atomic units of the asset they are bound to.
+    revenue = await db.fetch(
         """
-        SELECT COALESCE((SELECT sum(entry_charged_usdc + unlock_charged_usdc)
-                         FROM verifies), 0) AS revenue_total,
-               COALESCE((SELECT sum(entry_charged_usdc + unlock_charged_usdc)
-                         FROM verifies
-                         WHERE created_at >= date_trunc('week', now())), 0) AS revenue_week,
-               COALESCE((SELECT sum(earnings - paid_total) FROM associates
-                         WHERE status <> 'removed'), 0) AS owed
+        SELECT asset,
+               sum(amount) AS total,
+               COALESCE(sum(amount) FILTER (WHERE created_at >= date_trunc('week', now())), 0) AS week
+        FROM (
+            SELECT CASE WHEN contract_version = 3 THEN bound_terms->>'asset_symbol' ELSE 'USDC' END AS asset,
+                   CASE WHEN contract_version = 3
+                        THEN (COALESCE(entry_charged_atomic, 0) + COALESCE(unlock_charged_atomic, 0))
+                             / power(10::numeric, (bound_terms->>'asset_decimals')::int)
+                        ELSE entry_charged_usdc + unlock_charged_usdc END AS amount,
+                   created_at
+            FROM verifies
+        ) charged
+        GROUP BY asset ORDER BY asset
         """
+    )
+    async with db.acquire() as conn:
+        balances = await settlement.balances(conn)
+    removed = {r["id"] for r in await db.fetch("SELECT id FROM associates WHERE status = 'removed'")}
+    owed: dict[str, Decimal] = {}
+    earned_by: dict[int, dict] = {}
+    for b in balances:
+        earned_by.setdefault(b.associate_id, {})[b.asset] = b
+        if b.associate_id not in removed:
+            owed[b.asset] = owed.get(b.asset, Decimal(0)) + max(b.pending, Decimal(0))
+    terms_row = await db.fetchrow(
+        "SELECT terms_id, issued_at, valid_until, terms FROM pricing_terms ORDER BY issued_at DESC LIMIT 1"
     )
     daily = await db.fetch(
         """
@@ -109,8 +130,7 @@ async def admin_data(request: Request) -> JSONResponse:
     )
     associates = await db.fetch(
         """
-        SELECT a.name, a.username, a.status, a.available, a.accuracy,
-               a.earnings, a.earnings - a.paid_total AS pending_balance,
+        SELECT a.id, a.name, a.username, a.status, a.available, a.accuracy,
                count(v.id) FILTER (WHERE v.status <> 'pending') AS answered,
                avg(v.response_time_ms) AS avg_ms
         FROM associates a
@@ -126,7 +146,9 @@ async def admin_data(request: Request) -> JSONResponse:
                entry_source, entry_list_price_usdc, entry_charged_usdc,
                unlock_source, unlock_list_price_usdc, unlock_charged_usdc,
                free_use_number, failure_credit_granted,
-               x402_payment_tx, x402_unlock_tx, response_time_ms, created_at
+               x402_payment_tx, x402_unlock_tx, response_time_ms, created_at,
+               contract_version, bound_terms, entry_charged_atomic, unlock_charged_atomic,
+               applied_window
         FROM verifies ORDER BY created_at DESC LIMIT 15
         """
     )
@@ -163,9 +185,11 @@ async def admin_data(request: Request) -> JSONResponse:
                 "pending_now": totals["pending_now"],
                 "paid_count": totals["paid_count"],
                 "avg_ms_7d": float(totals["avg_ms_7d"]) if totals["avg_ms_7d"] else None,
-                "revenue_week": float(money["revenue_week"]),
-                "revenue_total": float(money["revenue_total"]),
-                "owed": float(money["owed"]),
+                "revenue": [
+                    {"asset": r["asset"], "week": float(r["week"]), "total": float(r["total"])}
+                    for r in revenue
+                ],
+                "owed": [{"asset": k, "amount": float(v)} for k, v in sorted(owed.items())],
             },
             "daily": [
                 {"day": r["day"].isoformat(), "total": r["total"], "paid": r["paid"]} for r in daily
@@ -179,8 +203,10 @@ async def admin_data(request: Request) -> JSONResponse:
                     "accuracy": float(r["accuracy"]),
                     "answered": r["answered"],
                     "avg_ms": float(r["avg_ms"]) if r["avg_ms"] else None,
-                    "earnings": float(r["earnings"]),
-                    "pending_balance": float(r["pending_balance"]),
+                    "balances": [
+                        {"asset": b.asset, "earned": float(b.earned), "pending": float(b.pending)}
+                        for b in earned_by.get(r["id"], {}).values()
+                    ],
                 }
                 for r in associates
             ],
@@ -201,6 +227,8 @@ async def admin_data(request: Request) -> JSONResponse:
                     "unlock_list_price_usdc": float(r["unlock_list_price_usdc"]),
                     "unlock_charged_usdc": float(r["unlock_charged_usdc"]),
                     "total_charged_usdc": float(r["entry_charged_usdc"] + r["unlock_charged_usdc"]),
+                    "charged": _charged(r),
+                    "applied_window": r["applied_window"],
                     "free_use_number": r["free_use_number"],
                     "failure_credit_granted": r["failure_credit_granted"],
                     "entry_transaction": r["x402_payment_tx"],
@@ -230,7 +258,6 @@ async def admin_data(request: Request) -> JSONResponse:
                 {
                     "id": r["id"],
                     "name": r["name"],
-                    "price": float(r["price_per_verify"]),
                     "commission": float(r["associate_commission"]),
                     "status": r["status"],
                     "free_allowance": r["free_allowance"],
@@ -239,6 +266,15 @@ async def admin_data(request: Request) -> JSONResponse:
                 }
                 for r in instances
             ],
+            "terms": (
+                {
+                    "terms_id": terms_row["terms_id"],
+                    "issued_at": terms_row["issued_at"].isoformat(),
+                    "valid_until": terms_row["valid_until"].isoformat(),
+                    "info": pricing.as_json(terms_row["terms"]),
+                }
+                if terms_row else None
+            ),
             "audit": [
                 {
                     "at": r["at"].isoformat(),
@@ -251,6 +287,19 @@ async def admin_data(request: Request) -> JSONResponse:
             ],
         }
     ))
+
+
+def _charged(r) -> dict:
+    """What one chain has been charged, in its own asset."""
+    if r["contract_version"] == 3 and r["bound_terms"]:
+        terms = pricing.as_json(r["bound_terms"])
+        decimals = int(terms["asset_decimals"])
+        entry = pricing.from_atomic(r["entry_charged_atomic"] or 0, decimals)
+        unlock = pricing.from_atomic(r["unlock_charged_atomic"] or 0, decimals)
+        asset = terms["asset_symbol"]
+    else:
+        entry, unlock, asset = r["entry_charged_usdc"], r["unlock_charged_usdc"], "USDC"
+    return {"asset": asset, "entry": float(entry), "unlock": float(unlock), "total": float(entry + unlock)}
 
 
 @router.get("/admin/wallets")
@@ -266,62 +315,48 @@ async def admin_wallets(request: Request) -> JSONResponse:
     return _harden(JSONResponse(await wallets.wallet_status()))
 
 
-class PricingIn(BaseModel):
-    price: float
+class CommissionIn(BaseModel):
     commission: float
 
 
 @router.post("/admin/instances/{instance_id}/pricing")
-async def set_pricing(instance_id: str, body: PricingIn, request: Request) -> JSONResponse:
+async def set_commission(instance_id: str, body: CommissionIn, request: Request) -> JSONResponse:
+    """Change the responder commission, in euros per SLA answer.
+
+    Prices are not editable here: contract v3 takes them from the core-api
+    environment (ADMISSION_EUR, SLA_UNLOCK_EUR, GRACE_UNLOCK_EUR), validated
+    at startup. A new commission applies to quotes issued from now on;
+    chains already admitted keep the commission they were bound with.
+    """
     if not _check_auth(request):
         raise HTTPException(status_code=401, detail="unauthorized")
-    price = round(body.price, 2)
-    commission = round(body.commission, 2)
-    if not (0 <= commission <= price <= 1000):
-        raise HTTPException(
-            status_code=422,
-            detail="vaatimus: 0 <= palkkio <= hinta <= 1000",
-        )
+    from core.api.server import pricing_config
+
+    commission = Decimal(str(round(body.commission, 2)))
+    ceiling = pricing_config().sla_unlock
+    if not (Decimal(0) <= commission <= ceiling):
+        raise HTTPException(status_code=422, detail=f"vaatimus: 0 <= palkkio <= {ceiling} EUR (SLA-hinta)")
     db = await get_pool()
-    old = await db.fetchrow(
-        "SELECT price_per_verify, associate_commission FROM instances WHERE id = $1", instance_id
-    )
+    old = await db.fetchval("SELECT associate_commission FROM instances WHERE id = $1", instance_id)
     if old is None:
         raise HTTPException(status_code=404, detail="unknown instance")
     row = await db.fetchrow(
-        """
-        UPDATE instances SET price_per_verify = $2, associate_commission = $3
-        WHERE id = $1
-        RETURNING id, price_per_verify, associate_commission
-        """,
+        "UPDATE instances SET associate_commission = $2 WHERE id = $1 RETURNING id, associate_commission",
         instance_id,
-        Decimal(str(price)),
-        Decimal(str(commission)),
+        commission,
     )
     await audit(
         "dashboard",
-        "price_changed",
+        "commission_changed",
         {
             "instance": instance_id,
-            "old_price": str(old["price_per_verify"]),
-            "new_price": str(row["price_per_verify"]),
-            "old_commission": str(old["associate_commission"]),
-            "new_commission": str(row["associate_commission"]),
+            "old_commission_eur": str(old),
+            "new_commission_eur": str(row["associate_commission"]),
         },
         actor="admin",
     )
-    log.info(
-        "pricing updated via dashboard: %s price=%s commission=%s",
-        instance_id, row["price_per_verify"], row["associate_commission"],
-    )
-    return JSONResponse(
-        {
-            "id": row["id"],
-            "price": float(row["price_per_verify"]),
-            "commission": float(row["associate_commission"]),
-            "platform_share": round(float(row["price_per_verify"]) - float(row["associate_commission"]), 2),
-        }
-    )
+    log.info("commission updated via dashboard: %s commission=%s EUR", instance_id, row["associate_commission"])
+    return JSONResponse({"id": row["id"], "commission": float(row["associate_commission"])})
 
 
 DASHBOARD_HTML = """<!doctype html>
@@ -484,15 +519,25 @@ DASHBOARD_HTML = """<!doctype html>
   </tr></thead><tbody></tbody></table>
 </div>
 
-<h2>Instanssit ja hinnoittelu</h2>
+<h2>Hinnoittelu (sopimus v3)</h2>
+<div class="card" style="overflow-x:auto">
+  <table id="termsTable"><thead><tr>
+    <th>Maksuväline</th><th class="num">Sisäänpääsy</th><th class="num">SLA-lunastus</th>
+    <th class="num">Grace-lunastus</th><th>Muunnos</th>
+  </tr></thead><tbody></tbody></table>
+  <div id="termsNote" class="muted" style="font-size:11px;margin-top:6px"></div>
+</div>
+
+<h2>Instanssit ja palkkio</h2>
 <div class="card" style="overflow-x:auto">
   <table id="instTable"><thead><tr>
-    <th>Instanssi</th><th>Tila</th><th class="num">Hinta $</th><th class="num">Palkkio $</th>
-    <th class="num">Alustalle $</th><th class="num">Ilmaiskiintiö / osoite</th><th></th>
+    <th>Instanssi</th><th>Tila</th><th class="num">Palkkio EUR / SLA-vastaus</th>
+    <th class="num">Ilmaiskiintiö / osoite</th><th></th>
   </tr></thead><tbody></tbody></table>
   <div class="muted" style="font-size:11px;margin-top:6px">
-    Hinta ja palkkio tallentuvat kantaan heti. Alustalle = hinta miinus palkkio.
-    Sopimushinnan muutos vaatii lisäksi X402_ENTRY_PRICE ja X402_UNLOCK_PRICE päivitykset sekä uuden API-sopimusversion.
+    Hinnat tulevat core-api:n ympäristöstä (ADMISSION_EUR, SLA_UNLOCK_EUR, GRACE_UNLOCK_EUR) eikä niitä muuteta täältä.
+    Palkkio tallentuu heti ja koskee uusia tarjouksia. Jo sisäänpäässeet ketjut pitävät palkkionsa.
+    Vastaaja ansaitsee ketjun omassa maksuvälineessä: SLA-vastaus koko palkkion, grace-vastaus suhteessa grace-hintaan.
   </div>
 </div>
 
@@ -506,7 +551,9 @@ DASHBOARD_HTML = """<!doctype html>
 <div id="tooltip"></div>
 
 <script>
-const money = v => "$" + v.toFixed(2);
+const amt = (v, asset) => v.toFixed(2) + " " + asset;
+const perAsset = (list, key) => list.length ? list.map(x => amt(x[key], x.asset)).join(" · ") : "0.00";
+const ATOMIC = (s, decimals) => (Number(s) / 10 ** decimals).toFixed(2);
 const secs = ms => ms == null ? "ei dataa" : (ms/1000).toFixed(1) + " s";
 const STATUS = {
   admission_pending: { fi: "maksu vahvistuu", color: "var(--warning)", icon: "\\u23F3" },
@@ -592,8 +639,8 @@ async function refresh() {
     tile("Tällä viikolla", t.week, "verifyä") +
     tile("Jonossa nyt", t.pending_now, t.pending_now > 0 ? "odottaa ihmistä" : "kaikki hoidettu") +
     tile("Keskivastausaika", secs(t.avg_ms_7d), "viimeiset 7 päivää") +
-    tile("Tuotto tällä viikolla", money(t.revenue_week), "kaikkiaan " + money(t.revenue_total)) +
-    tile("Maksamatta associateille", money(t.owed), "/maksa botissa");
+    tile("Tuotto tällä viikolla", perAsset(t.revenue, "week"), "kaikkiaan " + perAsset(t.revenue, "total")) +
+    tile("Maksamatta associateille", perAsset(t.owed, "amount"), "/maksa botissa");
   renderChart(data.daily);
   document.querySelector("#assocTable tbody").innerHTML = data.associates.map(a => {
     const avail = a.status !== "active" ? `<span class="muted">${esc(a.status)}</span>`
@@ -602,7 +649,7 @@ async function refresh() {
     return `<tr><td>${esc(a.name)}${a.username ? ` <span class="muted">@${esc(a.username)}</span>` : ""}</td>` +
       `<td>${avail}</td><td class="num">${a.answered}</td><td class="num">${secs(a.avg_ms)}</td>` +
       `<td class="num">${(a.accuracy * 100).toFixed(0)} %</td>` +
-      `<td class="num">${money(a.earnings)}</td><td class="num">${money(a.pending_balance)}</td></tr>`;
+      `<td class="num">${perAsset(a.balances, "earned")}</td><td class="num">${perAsset(a.balances, "pending")}</td></tr>`;
   }).join("") || `<tr><td colspan="7" class="muted">Ei vielä associateja. Lisää botissa: /lisaa @nimi</td></tr>`;
   document.querySelector("#recentTable tbody").innerHTML = data.recent.map(v => {
     const wallet = v.wallet_address ? v.wallet_address.slice(0, 6) + "..." + v.wallet_address.slice(-4) : "puuttuu";
@@ -611,21 +658,22 @@ async function refresh() {
     const unlock = v.unlock_source || (v.status === "accepted" || v.status === "rejected" || v.status === "refined" ? "odottaa" : "ei vielä");
     return `<tr><td>#V-${v.verify_no}</td><td title="${esc(v.wallet_address)}">${esc(wallet)}</td>` +
       `<td class="details-cell" title="${esc(v.intent + ": " + v.claim)}">${esc(v.intent)}: ${esc(v.claim)}</td>` +
-      `<td>${statusCell(v.status)}</td><td>${esc(entry)} (${money(v.entry_charged_usdc)})</td>` +
-      `<td>${esc(unlock)} (${money(v.unlock_charged_usdc)})</td>` +
-      `<td class="num">${money(v.total_charged_usdc)}</td>` +
+      `<td>${statusCell(v.status)}</td><td>${esc(entry)} (${amt(v.charged.entry, v.charged.asset)})</td>` +
+      `<td>${esc(unlock)}${v.applied_window ? " " + esc(v.applied_window) : ""} (${amt(v.charged.unlock, v.charged.asset)})</td>` +
+      `<td class="num">${amt(v.charged.total, v.charged.asset)}</td>` +
       `<td class="muted">${new Date(v.created_at).toLocaleString("fi-FI")}</td></tr>`;
   }).join("") || `<tr><td colspan="8" class="muted">Ei vielä verifyjä.</td></tr>`;
   document.querySelector("#entitlementTable tbody").innerHTML = data.entitlements.map(e => {
     const wallet = e.wallet_address.slice(0, 6) + "..." + e.wallet_address.slice(-4);
     const kind = e.kind === "initial_free" ? `ilmainen ${e.free_use_number}/5` : "epäonnistumiskrediitti";
-    const coverage = e.covers_unlock ? "0,10 + 2,90 USDC" : "0,10 USDC";
+    const coverage = e.covers_unlock ? "sisäänpääsy + lunastus" : "seuraava sisäänpääsy";
     return `<tr><td class="muted">${new Date(e.granted_at).toLocaleString("fi-FI")}</td>` +
       `<td title="${esc(e.wallet_address)}">${esc(wallet)}</td><td>${esc(kind)}</td>` +
       `<td>${coverage}</td><td>${esc(e.source_verify_id || "alkukiintiö")}</td>` +
       `<td>${esc(e.consumed_by_verify_id || "käyttämättä")}</td></tr>`;
   }).join("") || `<tr><td colspan="6" class="muted">Ei vielä ilmaiskäyttöjä tai krediittejä.</td></tr>`;
   renderInstances(data.instances);
+  renderTerms(data.terms);
   document.querySelector("#auditTable tbody").innerHTML = data.audit.map(a =>
     `<tr><td class="muted" style="white-space:nowrap">${new Date(a.at).toLocaleString("fi-FI")}</td>` +
     `<td>${esc(a.source)}</td><td>${esc(a.event)}</td>` +
@@ -633,6 +681,34 @@ async function refresh() {
   ).join("") || `<tr><td colspan="4" class="muted">Ei vielä tapahtumia.</td></tr>`;
   document.getElementById("updated").textContent =
     "Päivitetty " + new Date().toLocaleTimeString("fi-FI");
+}
+
+function renderTerms(terms) {
+  const tbody = document.querySelector("#termsTable tbody");
+  const note = document.getElementById("termsNote");
+  if (!terms) {
+    tbody.innerHTML = `<tr><td colspan="5" class="muted">Ei vielä tarjousta. Ensimmäinen 402 luo sen.</td></tr>`;
+    note.textContent = "";
+    return;
+  }
+  const info = terms.info;
+  const symbol = a => a.toLowerCase() === "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" ? "USDC"
+    : a.toLowerCase() === "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42" ? "EURC" : a.slice(0, 10) + "...";
+  tbody.innerHTML = info.prices.map(p => {
+    const conv = p.conversion
+      ? `1 EUR = ${esc(p.conversion.rate)} (${esc(p.conversion.source)}, ${esc(p.conversion.as_of)}), pyöristys ylös sentteihin`
+      : "euromääräinen, ei muunnosta";
+    return `<tr><td>${esc(symbol(p.asset))}</td><td class="num">${ATOMIC(p.admission, 6)}</td>` +
+      `<td class="num">${ATOMIC(p.sla, 6)}</td><td class="num">${p.grace ? ATOMIC(p.grace, 6) : "ei gracea"}</td>` +
+      `<td class="muted" style="font-size:11px">${conv}</td></tr>`;
+  }).join("");
+  const w = info.windows;
+  note.textContent =
+    `Pohja EUR: ${info.price_basis.admission} / ${info.price_basis.sla}` +
+    (info.price_basis.grace ? ` / ${info.price_basis.grace}` : "") +
+    `. SLA-ikkuna ${w.sla.within_seconds / 60} min` +
+    (w.grace ? `, grace ${w.grace.within_seconds / 3600} h` : ", ei grace-ikkunaa") +
+    ` sisäänpääsystä. Tarjous ${terms.terms_id}, voimassa ${new Date(terms.valid_until).toLocaleTimeString("fi-FI")} asti.`;
 }
 
 function renderInstances(instances) {
@@ -643,44 +719,29 @@ function renderInstances(instances) {
     `<tr data-id="${esc(i.id)}"><td>${esc(i.name)} <span class="muted">${esc(i.id)}</span></td>` +
     `<td>${i.status === "active" ? statusCell("accepted").replace("hyväksytty", "aktiivinen")
         : `<span class="muted">${esc(i.status)}</span>`}</td>` +
-    `<td class="num"><input class="price" data-f="price" type="number" step="0.01" min="0" value="${i.price.toFixed(2)}"></td>` +
     `<td class="num"><input class="price" data-f="commission" type="number" step="0.01" min="0" value="${i.commission.toFixed(2)}"></td>` +
-    `<td class="num platform-share">${money(i.price - i.commission)}</td>` +
     `<td class="num" title="${i.free_used_total} ilmaista verifyä yhteensä">${i.free_allowance} <span class="muted">(${i.free_agents} osoitetta)</span></td>` +
     `<td><button class="save">Tallenna</button><span class="save-msg"></span></td></tr>`
   ).join("");
   tbody.querySelectorAll("tr").forEach(tr => {
-    const priceInput = tr.querySelector('input[data-f="price"]');
     const commInput = tr.querySelector('input[data-f="commission"]');
-    const share = tr.querySelector(".platform-share");
     const msg = tr.querySelector(".save-msg");
-    const recompute = () => {
-      const p = parseFloat(priceInput.value) || 0;
-      const c = parseFloat(commInput.value) || 0;
-      share.textContent = money(p - c);
-      share.style.color = c > p ? "var(--critical)" : "";
-    };
-    priceInput.addEventListener("input", recompute);
-    commInput.addEventListener("input", recompute);
     tr.querySelector("button.save").addEventListener("click", async () => {
-      const p = parseFloat(priceInput.value);
       const c = parseFloat(commInput.value);
       msg.className = "save-msg";
-      if (!(c >= 0 && p >= c)) {
-        msg.className = "saved-err"; msg.textContent = "palkkio ei voi ylittää hintaa";
+      if (!(c >= 0)) {
+        msg.className = "saved-err"; msg.textContent = "palkkio ei voi olla negatiivinen";
         return;
       }
       try {
         const resp = await fetch(`/admin/instances/${tr.dataset.id}/pricing`, {
           method: "POST", credentials: "same-origin",
           headers: {"content-type": "application/json"},
-          body: JSON.stringify({price: p, commission: c}),
+          body: JSON.stringify({commission: c}),
         });
         if (!resp.ok) throw new Error((await resp.json()).detail || resp.status);
         const r = await resp.json();
-        priceInput.value = r.price.toFixed(2);
         commInput.value = r.commission.toFixed(2);
-        share.textContent = money(r.platform_share);
         msg.className = "saved-ok"; msg.textContent = "Tallennettu ✓";
         setTimeout(() => { msg.textContent = ""; }, 4000);
       } catch (e) {
@@ -711,12 +772,13 @@ async function refreshWallets() {
     const x = w[key];
     const st = WSTATE[x.state] || WSTATE.unknown;
     const bal = unit === "ETH" ? x.eth : x.usdc;
+    const balText = unit === "ETH" ? fmt(bal, unit) : fmt(bal, "USDC") + "<br>" + fmt(x.eurc, "EURC");
     const addr = x.address
       ? `<a href="${esc(x.explorer)}" target="_blank" rel="noopener noreferrer" title="${esc(x.address)}">` +
         `${esc(x.address.slice(0, 10))}...${esc(x.address.slice(-6))}</a>`
       : `<span class="muted">ei asetettu</span>`;
     return `<tr><td>${esc(x.label)}</td><td>${addr}</td>` +
-      `<td class="num">${fmt(bal, unit)}</td>` +
+      `<td class="num">${balText}</td>` +
       `<td><span class="status"><span class="dot" style="background:${st.color}"></span>` +
       `${st.icon} ${st.fi}</span></td>` +
       `<td class="muted" style="font-size:11px">${esc(x.purpose)}</td></tr>`;

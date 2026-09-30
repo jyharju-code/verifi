@@ -21,7 +21,7 @@ from mcp.types import CallToolResult, TextContent
 
 VERIFY_API = os.environ.get("VERIFY_API_URL", "http://verify-api:8702")
 MCP_PORT = int(os.environ.get("MCP_PORT", "8704"))
-MCP_CONTRACT_VERSION = "2.0.0"
+MCP_CONTRACT_VERSION = "3.0.0"
 MCP_PAYMENT_META_KEY = "x402/payment"
 MCP_PAYMENT_RESPONSE_META_KEY = "x402/payment-response"
 
@@ -32,11 +32,14 @@ mcp = FastMCP(
     stateless_http=True,
     instructions=(
         "Verifi sends your claim to a real human who answers accept, reject, "
-        "or a refined free-text correction. Every chain has two gates. Use "
+        "or a refined free-text correction. Every chain has an admission and one unlock. Use "
         "verify_claim with callback_url, then use unlock_verify when the "
         "callback reports ready. If no callback is available, poll get_verify. "
-        "Every chain is paid: 0.10 USDC entry, then 2.90 USDC unlock. There is "
-        "no free human work. x402-aware MCP clients can sign and "
+        "Every chain is paid, priced in euros and payable in USDC or EURC: an "
+        "admission, then an unlock whose price depends on when the human "
+        "answered (SLA window or grace window). Every price is in the first "
+        "payment requirement, and verifi_info returns the current terms. There "
+        "is no free human work. x402-aware MCP clients can sign and "
         "repeat paid tool calls automatically. Generic clients can pass the "
         "signed authorization as payment_signature. Pass callback_url to "
         "receive ready or failed events without an active polling loop. No "
@@ -187,7 +190,7 @@ async def verify_claim(
             },
             headers=headers,
         )
-    return _payment_result(resp, tool="verify_claim", price="0.10 USDC")
+    return _payment_result(resp, tool="verify_claim", price="The admission")
 
 
 @mcp.tool()
@@ -204,9 +207,12 @@ async def unlock_verify(
     ctx: Context,
     payment_signature: str | None = None,
 ) -> CallToolResult:
-    """Pass gate 2 for a ready chain and return the human result.
+    """Unlock a ready chain and return the human result.
 
-    This gate costs 2.90 USDC. Omit payment_signature first: standard x402-aware
+    The price was decided when the human answered: the SLA amount inside the
+    SLA window, the grace amount after it, always in the asset the admission
+    was paid in. get_verify shows it as service_window.unlock_amount before
+    you pay. Omit payment_signature first: standard x402-aware
     MCP clients handle the payment request and retry through MCP metadata
     automatically. Generic clients can pass the resulting x402 signature
     manually. Never pass a private key.
@@ -219,17 +225,31 @@ async def unlock_verify(
             params={"id": verify_id},
             headers=headers,
         )
-    return _payment_result(resp, tool="unlock_verify", price="2.90 USDC")
+    return _payment_result(resp, tool="unlock_verify", price="The unlock")
+
+
+async def _current_terms() -> dict | None:
+    """The current quote from verify-api's internal /terms, or None."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{VERIFY_API}/terms")
+        if resp.status_code == 200:
+            return resp.json().get("terms")
+    except (httpx.HTTPError, ValueError):
+        pass
+    return None
 
 
 @mcp.tool()
-def verifi_info() -> dict:
-    """Service description, pricing, and rules."""
+async def verifi_info() -> dict:
+    """Service description, the current price terms, and rules."""
+    terms = await _current_terms()
     return {
         "service": "Verifi: verified human loops for AI agents",
         "url": "https://verifi.cloud",
         "docs": "https://verifi.cloud/docs/",
         "mcp_endpoint": "https://verifi.cloud/mcp",
+        "contract_version": 3,
         "authentication": {
             "api_key_required": False,
             "signup_required": False,
@@ -238,7 +258,18 @@ def verifi_info() -> dict:
         },
         "pricing": {
             "free": "docs, MCP discovery, and the 402 response only. No free human work.",
-            "paid": "0.10 USDC entry, then a separate 2.90 USDC unlock, total 3.00 USDC",
+            "paid": (
+                "Three gates, priced in euros: an admission, then one unlock at the SLA "
+                "price if the human answers inside the SLA window, or at the lower grace "
+                "price if the answer comes later. Payable in USDC (converted at the ECB "
+                "reference rate, rounded up to the cent) or EURC. The unlock is paid in "
+                "the asset the admission was paid in."
+            ),
+            "terms": terms,
+            "terms_note": (
+                "terms is the service-windows info of the current quote, the same object "
+                "the first 402 carries. It is null if no quote can be issued right now."
+            ),
         },
         "mcp_payment": (
             "Paid gates return a standard x402 MCP payment requirement. Compatible "
@@ -258,8 +289,9 @@ def verifi_info() -> dict:
             "One active verify per agent_id at a time",
             "Prefer callback_url; use get_verify as the recovery path",
             "Ready results require the separate unlock action",
-            "Unanswered verifies expire in 60 minutes",
-            "A failed admitted verify grants one 0.10 USDC entry credit",
+            "There is no cancellation: a ready result unlocks at the SLA or the grace price",
+            "Unanswered verifies expire at the end of the last window",
+            "An expired verify grants one free admission for the same wallet",
             "A real human reads every request: do not spam",
         ],
     }

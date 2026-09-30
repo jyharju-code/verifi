@@ -1,58 +1,68 @@
-# Verifi Agent API, contract version 2
+# Verifi Agent API, contract version 3
 
-Verifi sends agent requests to real humans. Human work can take several minutes. The API is asynchronous and resumable through a durable verify_id.
+Verifi sends agent requests to real humans. Human work can take minutes or hours. The API is asynchronous and resumable through a durable verify_id (also returned as work_id).
 
 Canonical docs: https://verifi.cloud/docs/
 Full reference for LLMs: https://verifi.cloud/llms-full.txt
 OpenAPI 3.1 spec: https://verifi.cloud/openapi.json
 
-## Required two-gate flow
+## Required three-gate flow
 
 1. POST /verify with JSON {intent, claim, agent_id, callback_url?}. agent_id is required and must be the requester 0x wallet address.
-2. Gate 1 costs 0.10 USDC through x402. The request does not enter the human queue before settlement. Store verify_id from the 202 response.
+2. Gate 1, the admission, costs 0.10 EUR through x402. The 402 offers USDC first and EURC second, and carries every price of the chain in extensions["service-windows"]. Pay before terms_valid_until (about 10 minutes); a payment against an expired quote gets a fresh 402 and is not settled. The request does not enter the human queue before settlement. Store verify_id from the 202 response.
 3. Prefer callback_url for verify.ready or verify.failed so no active polling loop is needed. Persist verify_id. If callback delivery fails, poll GET /verify/{verify_id}, honor retry_after_seconds, and do not assume a short fixed deadline.
-4. If status is failed, stop. failure.entry_credit_granted reports the 0.10 USDC entry credit.
-5. If status is ready, POST /verify-unlock?id={verify_id}.
-6. Gate 2 is a new 2.90 USDC x402 payment. After settlement the response status is completed and contains the human answer.
+4. If status is failed, stop. failure.entry_credit_granted reports whether the wallet's next admission is free.
+5. If status is ready, check service_window, then POST /verify-unlock?id={verify_id}.
+6. The unlock is a new x402 payment in the asset the admission was paid in: 2.90 EUR (SLA gate) if the human answered within 60 minutes of admitted_at, 1.45 EUR (grace gate) if later, within 24 hours. After settlement the response status is completed and contains the human answer.
 
-Total successful paid price: 0.10 + 2.90 = 3.00 USDC.
+The price is decided by ready_at alone, never by when the agent polls or unlocks. A boundary instant belongs to the earlier window. There is no cancellation.
+
+## Prices and assets
+
+| Gate | EUR basis | EURC atomic | USDC atomic at 1 EUR = 1.17 USD |
+|---|---|---|---|
+| Admission | 0.10 | 100000 | 120000 |
+| SLA unlock | 2.90 | 2900000 | 3400000 |
+| Grace unlock | 1.45 | 1450000 | 1700000 |
+
+EURC amounts are the euro prices. USDC amounts are converted at the ECB euro reference rate, rounded up to the cent; the rate, source, and date are in the terms and never change after admission. Rates: ECB euro foreign exchange reference rates, published for information purposes only. Source: European Central Bank.
 
 ## Free access and credit funding
 
-Every verification is paid. There is no free human work and no free chains. What is free, because it needs no human: the documentation, MCP discovery, and the 402 Payment Required response itself. An agent can send an unpaid request, receive a 402 with the exact price and x402 requirements, and thereby test the connection and read the price without paying. initial_free is a legacy funding source only, kept for historical chains, and no longer grants free human work.
+Every verification is paid. There is no free human work and no free chains. What is free, because it needs no human: the documentation, MCP discovery, the status endpoint, and the 402 Payment Required response itself. An agent can send an unpaid request, receive a 402 with every price and the x402 requirements, and thereby test the connection and read the prices without paying. initial_free is a legacy funding source only, kept for historical chains, and no longer grants free human work.
 
-If an admitted chain fails without a redeemable result, what the wallet gets back depends on how gate 1 was funded. If gate 1 was paid with x402, the wallet receives one failure_credit worth 0.10 USDC. It covers gate 1 of the next chain and does not cover gate 2, which still costs 2.90 USDC. If gate 1 was funded by an earlier credit rather than a fresh x402 payment, that entitlement is returned to the wallet instead and no new credit is minted. Credits therefore come only from a paid, failed chain and cannot be farmed for free work. Read failure.entry_credit_granted to see which happened.
+If nobody answers within 24 hours, the chain fails with failure.reason human_timeout. If gate 1 was paid with x402, the wallet receives one admission credit (failure.entry_credit "next_admission"): its next admission is free, bound to the same asset. The credit never covers the unlock. If gate 1 was funded by an earlier credit rather than a fresh x402 payment, that credit is returned to the wallet instead and no new credit is minted. Credits therefore come only from a paid, failed chain and cannot be farmed for free work. Read failure.entry_credit_granted to see which happened.
 
 ## Statuses
 
-- processing: admission is settling or a human is working. Poll again.
-- ready: a human result exists but is locked. Call unlock.
+- processing: admission is settling or a human is working. Poll again. admitted_at, sla_deadline, and grace_deadline show the windows.
+- ready: a human result exists but is locked. service_window states the applied window and the unlock amount. Call unlock.
 - failed: no redeemable result will be produced. Stop.
-- completed: gate 2 passed. Use verdict and explanation.
+- completed: the unlock passed. Use verdict and explanation.
 
 Human verdict vocabulary: true, false, refined. Refined free text is in explanation and response.
 
 ## x402
 
-x402 v2, exact scheme, USDC on Base mainnet eip155:8453. Entry and unlock are separate EIP-3009 authorizations, separate settlements, and separate transaction hashes tied to the same verify_id. The buyer needs no ETH. @x402/fetch can read the 402 requirement, sign it with ExactEvmScheme, and retry automatically. Buyer quickstart: https://docs.x402.org/getting-started/quickstart-for-buyers
+x402 v2, exact scheme, on Base mainnet eip155:8453, with USDC (0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913) or EURC (0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42), both 6 decimals. The required amount is the requirement's amount field, in atomic units. The EIP-712 name and version are in each requirement's extra, with the terms_id. Admission and unlock are separate EIP-3009 authorizations, separate settlements, and separate transaction hashes tied to the same verify_id. The buyer needs no ETH. @x402/fetch can read the 402 requirement, sign it with ExactEvmScheme, and retry automatically; without a selector it pays with the first option, USDC. Buyer quickstart: https://docs.x402.org/getting-started/quickstart-for-buyers
 
 ## Reliability and rules
 
 - One active chain per wallet.
-- Unanswered human work expires after 60 minutes.
+- Unanswered human work expires 24 hours after admission. expires_at equals the last deadline.
 - callback_url receives verify.ready or verify.failed and removes the need for an active polling loop. It never carries a locked result. Persist verify_id and use polling as the recovery path.
 - No API key, signup, account, or whitelist is required. Just a requester wallet. The wallet signs the x402 payments and receives any earned credits.
-- A refused admission response is never charged. x402 cancels settlement for any 4xx or 5xx answer, so POST /verify returns 402 with the payment requirements whenever the caller has no entitlement, including while the human queue is full, and reports 503 or 400 only after that gate.
+- A refused admission response is never charged. x402 cancels settlement for any 4xx or 5xx answer, so POST /verify returns 402 with the payment requirements whenever the caller has no entitlement, including while the human queue is full, and reports 503, 409, or 400 only after that gate. When no quote can be issued, it answers 503 instead of 402.
 - GET polling never costs money.
 
 ## MCP
 
 Endpoint: https://verifi.cloud/mcp
 
-Tools: verify_claim, get_verify, unlock_verify, verifi_info. verify_claim accepts optional callback_url.
+Tools: verify_claim, get_verify, unlock_verify, verifi_info. verify_claim accepts optional callback_url. unlock_verify pays the SLA or grace unlock. verifi_info returns the current terms.
 
-All chains use the same MCP tools. If a gate is paid, the tool returns a standard x402 PaymentRequired result with x402Version, accepts, and the MCP resource. An x402-aware MCP client signs the selected requirement with the requester wallet and repeats the same tool call using x402/payment metadata. A successful paid call returns x402/payment-response metadata. Generic MCP clients can instead pass an encoded authorization through the optional payment_signature argument. Never send a private key. Gate 1 and gate 2 require separate signatures tied to the same verify_id.
+All chains use the same MCP tools. If a gate is paid, the tool returns a standard x402 PaymentRequired result with x402Version, accepts, extensions, and the MCP resource. An x402-aware MCP client signs the selected requirement with the requester wallet and repeats the same tool call using x402/payment metadata. A successful paid call returns x402/payment-response metadata. Generic MCP clients can instead pass an encoded authorization through the optional payment_signature argument. Never send a private key. The admission and the unlock require separate signatures tied to the same verify_id.
 
 ## Audit
 
-PostgreSQL stores wallet address, request content, both list prices, both charged amounts, both transaction hashes, lifecycle timestamps, failure credits, their source chains, and their consuming chains. audit_log is append-only.
+PostgreSQL stores wallet address, request content, the bound terms, the applied window, charged amounts in the bound asset, both transaction hashes, lifecycle timestamps, every quote and ECB rate used, failure credits, their source chains, and their consuming chains. audit_log is append-only.

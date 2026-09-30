@@ -106,3 +106,43 @@ a paid gate is reached, the MCP tool returns the exact x402
 `PAYMENT-REQUIRED` value. The agent signs it with its own wallet and repeats
 the same tool with `payment_signature`. Verifi receives only the signed,
 single-use authorization, never the agent's private key.
+
+## Three gates, euro pricing, EURC (contract v3)
+
+A human answer is worth more when it comes quickly, and an agent should know
+every price before it pays anything. Contract v3 therefore has three gates:
+an admission (0.10 EUR), and one unlock whose price is decided by when the
+human answered: 2.90 EUR within the 60 minute SLA window, 1.45 EUR in the 24
+hour grace window. The windows start at `admitted_at`, the recorded admission
+settlement, so a slow settlement never eats into the SLA. The price depends
+on `ready_at` alone, and a boundary instant belongs to the earlier window, so
+an agent that polls slowly never loses the SLA price and one that polls
+quickly never gains it. There is no cancellation: paying the admission is a
+commitment to unlock at one of the two prices. After 24 hours without an
+answer the chain fails and the wallet gets a free next admission.
+
+Prices are defined once, in euros, by env (`ADMISSION_EUR`, `SLA_UNLOCK_EUR`,
+`GRACE_UNLOCK_EUR`, `SLA_SECONDS`, `GRACE_SECONDS`) and validated at startup,
+and one pricing function in `core/pricing.py` builds every quote. EURC pays
+the euro prices. USDC pays them converted at the ECB euro reference rate,
+rounded up to the next cent, with the rate, source and date disclosed. A
+quote is stored and valid for ten minutes; the asset of the admission binds
+the whole chain, and the bound amounts are never recomputed. The x402
+requirement carries the quote id in `extra`, so a payment signed against an
+expired quote or in the other asset matches nothing and is never settled.
+
+USDC is listed first in `accepts` because x402 clients that do not choose pay
+with the first option, and every agent built against contract 2 holds USDC.
+Status `failed` with reason `human_timeout` is kept for an expired chain, so
+those agents keep working. The terms are published in the `service-windows`
+x402 extension, drafted in `docs/specs/extension-service-windows.md`.
+
+Responders earn in the chain's own asset, never converted:
+`floor(unlock_amount * commission / SLA price)`, with the commission
+snapshotted at admission. An SLA answer earns the commission in full, a grace
+answer proportionally less. The old `associates.earnings` total was carried
+into the new ledger once as a USDC opening balance.
+
+Open: a ready result can currently be unlocked at any time at its bound
+price (no unlock deadline), and the human queue caps are unchanged although a
+chain can now wait up to 24 hours.

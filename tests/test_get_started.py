@@ -26,7 +26,7 @@ class GetStartedPageTests(unittest.TestCase):
             "other compatible online tools",
             "Make the wallet ready to use Verifi and other x402 services.",
             "BASE MAINNET",
-            "USDC, not ETH",
+            "USDC or EURC, not ETH",
         ]
         for text in expected:
             with self.subTest(text=text):
@@ -34,10 +34,14 @@ class GetStartedPageTests(unittest.TestCase):
 
     def test_page_keeps_verifi_pricing_accurate(self):
         self.assertIn("Test the connection free", self.page)
-        self.assertIn("An unpaid request returns a 402 with the exact price", self.page)
-        self.assertIn("3 USDC per completed review", self.page)
-        self.assertIn("0.10 USDC enters the queue", self.page)
-        self.assertIn("2.90 USDC unlocks the answer", self.page)
+        self.assertIn("An unpaid request returns a 402 with every price", self.page)
+        self.assertIn("0.10 EUR enters the queue", self.page)
+        self.assertIn("2.90 EUR unlocks an answer given within 60 minutes", self.page)
+        self.assertIn("1.45 EUR one given later, within 24 hours", self.page)
+        self.assertIn("Pay in EURC, or in USDC", self.page)
+        for stale in ("3 USDC per completed review", "2.90 USDC unlocks the answer"):
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, self.page)
 
     def test_page_stays_simple_for_the_reader(self):
         for implementation_detail in (

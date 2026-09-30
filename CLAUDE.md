@@ -23,9 +23,14 @@ second. Think Shopify: the platform powers many stores.
   the single public surface. Docker published ports bypass UFW, so
   localhost binding is the real firewall.
 - The x402 middleware settles during the response. A paid verify starts in
-  admission_pending and must not enter the human queue until the 0.10 USDC
-  entry settlement is recorded. A ready result remains locked until its
-  separate 2.90 USDC settlement is recorded.
+  admission_pending and must not enter the human queue until its admission
+  settlement (0.10 EUR, in USDC or EURC) is recorded. A ready result remains
+  locked until its separate unlock settlement is recorded: 2.90 EUR if the
+  human answered within the SLA window, 1.45 EUR in the grace window, always
+  in the asset of the admission (contract v3, docs/API.md).
+- Prices come from one pricing function in core/pricing.py, configured by
+  env and validated at startup. The price of a chain is bound at admission
+  and decided by ready_at; it is never recomputed.
 - Schema changes ship as idempotent migrations in core/db/migrations/ and
   are reflected in the base schema files. The core API runs
   `python -m core.db.migrate` before startup and records applied files in

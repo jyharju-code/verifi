@@ -1,6 +1,6 @@
-# Verifi Agent API, full reference, contract version 2
+# Verifi Agent API, full reference, contract version 3
 
-Verifi sends agent requests to real humans and returns the human verdict. Human work takes minutes, so the API is asynchronous and resumable through a durable verify_id.
+Verifi sends agent requests to real humans and returns the human verdict. Human work can take minutes or hours, so the API is asynchronous and resumable through a durable verify_id (also returned as work_id).
 
 Short version of this file: https://verifi.cloud/llms.txt
 OpenAPI 3.1 spec: https://verifi.cloud/openapi.json
@@ -11,44 +11,60 @@ No API key, signup, account, or whitelist. The requester wallet address is the o
 
 ## The chain
 
-One verification is one chain with two explicit gates.
+One verification is one chain with three gates. Every price of the chain is known before the agent pays anything: the first 402 carries the full terms.
 
-1. Gate 1, POST /verify, 0.10 USDC. Admits the request to the human queue. A paid chain does not reach a human before its entry settlement is recorded.
-2. A human reads the request and answers accept, reject, or a refined free text correction.
-3. Gate 2, POST /verify-unlock, 2.90 USDC. Releases the answer.
+1. Gate 1, POST /verify, the admission: 0.10 EUR. Admits the request to the human queue. A paid chain does not reach a human before its admission settlement is recorded. The windows start at that moment, admitted_at.
+2. A human reads the request and answers accept, reject, or a refined free text correction. The moment of the answer is ready_at.
+3. Gate 2 or gate 3, POST /verify-unlock, releases the answer. Gate 2, the SLA unlock, costs 2.90 EUR if ready_at is within 60 minutes of admitted_at. Gate 3, the grace unlock, costs 1.45 EUR if ready_at is later, within 24 hours of admitted_at.
 
-Total for one successful paid chain: 0.10 + 2.90 = 3.00 USDC.
+The unlock price is decided by ready_at alone. A boundary instant belongs to the earlier, higher priced window. When the agent polls or unlocks does not change the price. Exactly one unlock is paid per chain.
 
-Every verification is paid at both gates. There is no free human work and no free chains. What is free, because it needs no human: the documentation, MCP discovery, and the 402 Payment Required response itself. An agent can send an unpaid request, receive a 402 with the exact price and x402 requirements, and thereby test the connection and read the price without paying.
+Total for one successful paid chain: 0.10 + 2.90 = 3.00 EUR, or 0.10 + 1.45 = 1.55 EUR when the human answered in the grace window.
+
+There is no cancellation. Paying the admission is a commitment: a ready result unlocks at the SLA price or at the grace price. A ready result stays unlockable at its fixed price; there is currently no unlock deadline.
+
+Every verification is paid. There is no free human work and no free chains. What is free, because it needs no human: the documentation, MCP discovery, the status endpoint, and the 402 Payment Required response itself. An agent can send an unpaid request, receive a 402 with every price and the x402 requirements, and thereby test the connection and read the prices without paying.
 
 ## Pricing
 
-| Chain | Gate 1 | Gate 2 | Total |
-|---|---|---|---|
-| Every paid chain | 0.10 | 2.90 | 3.00 |
-| Chain funded by a failure credit | 0.00 | 2.90 | 2.90 |
+Prices are set in euros and paid on Base mainnet in USDC or EURC. The asset of gate 1 binds the chain: the unlock is paid in the same asset on the same network.
 
-Amounts are USDC on Base mainnet. Polling never costs money. A 429 or 503 admission answer is never charged, because x402 cancels settlement for any 4xx or 5xx response: the signed authorization is never submitted to the facilitator.
+| Gate | EUR basis | EURC | USDC at 1 EUR = 1.17 USD |
+|---|---|---|---|
+| 1. Admission | 0.10 | 0.10 (100000 atomic) | 0.12 (120000 atomic) |
+| 2. SLA unlock, answer within 60 minutes | 2.90 | 2.90 (2900000 atomic) | 3.40 (3400000 atomic) |
+| 3. Grace unlock, answer within 24 hours | 1.45 | 1.45 (1450000 atomic) | 1.70 (1700000 atomic) |
+
+EURC amounts are the euro prices. USDC amounts are the euro prices converted at the ECB euro reference rate and rounded up to the next cent, at the moment of the quote. The rate, its source, and its date are disclosed in the terms (prices[].conversion) and never change after admission.
+
+Rates: ECB euro foreign exchange reference rates, published for information purposes only. Source: European Central Bank.
+
+| Chain | Gate 1 | Unlock |
+|---|---|---|
+| Every paid chain | 0.10 EUR | 2.90 EUR (SLA) or 1.45 EUR (grace) |
+| Chain funded by an admission credit | 0.00 | 2.90 EUR (SLA) or 1.45 EUR (grace) |
+
+Polling never costs money. A 409, 429, or 503 admission answer is never charged, because x402 cancels settlement for any 4xx or 5xx response: the signed authorization is never submitted to the facilitator.
 
 ## Funding and credits
 
 initial_free: a legacy funding source only, kept for historical chains. It no longer grants free human work, and no free chains are issued to new wallets.
 
-failure_credit: worth 0.10 USDC, covers gate 1 of the next chain only. Gate 2 still costs 2.90 USDC.
+failure_credit: an admission credit. It covers gate 1 of the wallet's next chain only, and that chain is bound to the same asset as the chain that earned it. The unlock is still paid at the SLA or the grace price.
 
-What happens when an admitted chain expires without an answer depends on how gate 1 was funded:
+If no human answers within the last window (24 hours after admitted_at), the chain fails with reason human_timeout. What the wallet gets back depends on how gate 1 was funded:
 
-- Gate 1 paid with x402: the wallet receives one failure_credit, because real money was spent.
-- Gate 1 funded by an earlier credit rather than a fresh x402 payment: that entitlement is returned to the wallet and no new credit is minted. Credits therefore come only from a paid, failed chain and cannot be farmed for free work.
+- Gate 1 paid with x402: the wallet receives one failure_credit (failure.entry_credit "next_admission"), because real money was spent. Its next admission is free.
+- Gate 1 funded by an earlier credit rather than a fresh x402 payment: that credit is returned to the wallet and no new credit is minted. Credits therefore come only from a paid, failed chain and cannot be farmed for free work.
 
-Read failure.entry_credit_granted in the failed response to see which happened.
+The credit is not a cash transfer. Read failure.entry_credit_granted in the failed response to see which happened.
 
 ## Statuses
 
-- processing: admission is settling or a human is working. Poll again, honor retry_after_seconds.
-- ready: a human answered but the result is locked. Call unlock.
+- processing: admission is settling or a human is working. Poll again, honor retry_after_seconds. admitted_at, sla_deadline, and grace_deadline show the windows; expires_at equals grace_deadline, the last deadline.
+- ready: a human answered but the result is locked. service_window states the applied window and the unlock amount. Call unlock.
 - failed: no redeemable result will be produced. Stop.
-- completed: gate 2 passed. verdict, explanation, and response are populated.
+- completed: the unlock passed. verdict, explanation, and response are populated.
 
 Follow next_action instead of inferring behavior from status. It is one of poll, unlock, stop, done.
 
@@ -56,7 +72,7 @@ Human verdict vocabulary: true, false, refined. When the verdict is refined, the
 
 ## Full example, paid chain with curl
 
-Step 1, submit. Without an entitlement this answers 402 with the gate 1 requirement.
+Step 1, submit. Without an entitlement this answers 402 with the gate 1 requirements and the terms.
 
 ```
 curl -sS -X POST https://verifi.cloud/verify \
@@ -69,23 +85,85 @@ curl -sS -X POST https://verifi.cloud/verify \
   }'
 ```
 
-402 answer, gate 1 requirement. The same object is base64 encoded in the PAYMENT-REQUIRED header.
+402 answer. The JSON body is empty. The PAYMENT-REQUIRED header is a base64 encoded x402 v2 PaymentRequired object that decodes to the following. Each extension also carries a schema field, the JSON Schema of its info, omitted here; the service-windows schema is ServiceWindowsInfo in openapi.json.
 
 ```
 {
   "x402Version": 2,
-  "accepts": [{
-    "scheme": "exact",
-    "network": "eip155:8453",
-    "resource": "https://verifi.cloud/verify",
+  "error": "Payment required",
+  "resource": {
+    "url": "https://verifi.cloud/verify",
     "description": "Gate 1 of one Verifi chain. Admit one request to the human queue.",
-    "payTo": "0xTHE_RECEIVING_ADDRESS",
-    "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-    "maxAmountRequired": "100000"
-  }],
-  "error": "0.10 USDC payment is required. Sign it with the requester wallet and retry."
+    "mimeType": "application/json"
+  },
+  "accepts": [
+    {
+      "scheme": "exact",
+      "network": "eip155:8453",
+      "amount": "120000",
+      "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "payTo": "0xTHE_RECEIVING_ADDRESS",
+      "maxTimeoutSeconds": 300,
+      "extra": { "name": "USD Coin", "version": "2", "terms_id": "st_5f0c2a9e4b7d13a8c6e1f042" }
+    },
+    {
+      "scheme": "exact",
+      "network": "eip155:8453",
+      "amount": "100000",
+      "asset": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
+      "payTo": "0xTHE_RECEIVING_ADDRESS",
+      "maxTimeoutSeconds": 300,
+      "extra": { "name": "EURC", "version": "2", "terms_id": "st_5f0c2a9e4b7d13a8c6e1f042" }
+    }
+  ],
+  "extensions": {
+    "service-windows": {
+      "info": {
+        "version": 1,
+        "terms_id": "st_5f0c2a9e4b7d13a8c6e1f042",
+        "terms_valid_until": "2026-10-01T09:10:00.000Z",
+        "windows": { "sla": { "within_seconds": 3600 }, "grace": { "within_seconds": 86400 } },
+        "price_basis": { "currency": "EUR", "admission": "0.10", "sla": "2.90", "grace": "1.45" },
+        "prices": [
+          {
+            "network": "eip155:8453",
+            "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            "admission": "120000",
+            "sla": "3400000",
+            "grace": "1700000",
+            "conversion": { "from": "EUR", "rate": "1.17", "source": "ECB euro reference rate", "as_of": "2026-09-30", "rounding": "up_to_cent" }
+          },
+          {
+            "network": "eip155:8453",
+            "asset": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
+            "admission": "100000",
+            "sla": "2900000",
+            "grace": "1450000"
+          }
+        ],
+        "asset_binding": "admission_asset",
+        "expiry": { "admission_credit": "next_admission" },
+        "cancellation": "none",
+        "status_url_template": "https://verifi.cloud/verify/{work_id}",
+        "unlock_url_template": "https://verifi.cloud/verify-unlock?id={work_id}"
+      }
+    },
+    "bazaar": {
+      "info": {
+        "input": { "type": "http", "bodyType": "json", "body": { "intent": "...", "claim": "...", "agent_id": "0x..." }, "method": "POST" },
+        "output": { "type": "json", "example": { "verify_id": "...", "status": "processing", "next_action": "poll", "poll_url": "/verify/...", "contract_version": 3 } }
+      }
+    }
+  }
 }
 ```
+
+Reading the terms:
+
+- accepts lists USDC first and EURC second. x402 clients that do not choose pay with the first option.
+- Amounts in accepts and prices are strings in the asset's atomic units, 6 decimals for both assets. For each asset, prices[].admission equals the amount of its accepts option. price_basis is in decimal euros.
+- The quote can be paid until terms_valid_until, about ten minutes. A payment signed against an expired quote is not settled: the answer is a fresh 402 with fresh terms, and the agent signs again.
+- extensions["service-windows"] follows a draft x402 extension for timed human work. The unlock 402 carries the same extension with the decided window.
 
 Sign one entry from accepts with the requester wallet and repeat the identical request with the authorization in the PAYMENT-SIGNATURE header. An x402 aware client such as @x402/fetch does this automatically.
 
@@ -96,11 +174,13 @@ curl -sS -X POST https://verifi.cloud/verify \
   -d '{ "intent": "...", "claim": "...", "agent_id": "0x1111111111111111111111111111111111111111" }'
 ```
 
-202 answer. Persist verify_id. It is the only durable handle for the chain.
+202 answer, here for a chain paid in EURC. Persist verify_id. It is the only durable handle for the chain.
 
 ```
 {
   "verify_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+  "work_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+  "contract_version": 3,
   "status": "processing",
   "human_status": null,
   "verdict": null,
@@ -111,26 +191,60 @@ curl -sS -X POST https://verifi.cloud/verify \
   "funding": {
     "entry_source": "x402",
     "free_use_number": null,
-    "entry_list_price_usdc": "0.10",
-    "entry_charged_usdc": "0.10",
+    "asset": { "network": "eip155:8453", "address": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42", "symbol": "EURC", "decimals": 6 },
+    "entry_amount_atomic": "100000",
+    "entry_charged_atomic": "100000",
     "unlock_source": null,
-    "unlock_list_price_usdc": "2.90",
-    "unlock_charged_usdc": "0.00",
-    "total_list_price_usdc": "3.00",
-    "total_charged_usdc": "0.10"
+    "unlock_window": null,
+    "unlock_amount_atomic": "2900000",
+    "unlock_charged_atomic": "0",
+    "total_amount_atomic": "3000000",
+    "total_charged_atomic": "100000",
+    "entry_list_price_usdc": null,
+    "entry_charged_usdc": null,
+    "unlock_list_price_usdc": null,
+    "unlock_charged_usdc": null,
+    "total_list_price_usdc": null,
+    "total_charged_usdc": null
   },
-  "created_at": "2026-07-18T09:00:00.000Z",
-  "admitted_at": "2026-07-18T09:00:00.100Z",
-  "expires_at": "2026-07-18T10:00:00.000Z",
+  "created_at": "2026-10-01T09:00:00+00:00",
+  "admitted_at": null,
+  "sla_deadline": null,
+  "grace_deadline": null,
+  "ready_at": null,
+  "expires_at": null,
   "responded_at": null,
   "unlocked_at": null,
+  "terms": {
+    "version": 1,
+    "terms_id": "st_5f0c2a9e4b7d13a8c6e1f042",
+    "windows": { "sla": { "within_seconds": 3600 }, "grace": { "within_seconds": 86400 } },
+    "price_basis": { "currency": "EUR", "admission": "0.10", "sla": "2.90", "grace": "1.45" },
+    "network": "eip155:8453",
+    "asset": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
+    "asset_symbol": "EURC",
+    "asset_decimals": 6,
+    "asset_eip712": { "name": "EURC", "version": "2" },
+    "admission": "100000",
+    "sla": "2900000",
+    "grace": "1450000",
+    "asset_binding": "admission_asset",
+    "expiry": { "admission_credit": "next_admission" },
+    "cancellation": "none"
+  },
   "next_action": "poll",
   "poll_url": "/verify/0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
   "retry_after_seconds": 15,
-  "response_timeout_ms": 3600000,
+  "response_timeout_ms": 86400000,
   "message": "Admission accepted. Poll until status is ready or failed."
 }
 ```
+
+terms is the part of the quote bound to this chain, for the asset it was paid in. It never changes. On a USDC chain it also carries the conversion.
+
+The x402 response is built while the admission payment settles, so on the 202 of a paid admission admitted_at, both deadlines, and expires_at are still null. They appear on the first poll, where expires_at equals grace_deadline. An admission paid with a credit has them at once.
+
+The funding amounts are atomic units of the bound asset and are always present. The *_usdc fields keep their meaning, decimal USDC, on a USDC chain and are null on an EURC chain, where a USDC number would be misleading. Until the human answers, unlock_amount_atomic shows the SLA amount, the most the unlock can cost.
 
 Step 2, wait. Prefer the callback. Poll only as the recovery path.
 
@@ -138,84 +252,173 @@ Step 2, wait. Prefer the callback. Poll only as the recovery path.
 curl -sS https://verifi.cloud/verify/0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11
 ```
 
-While processing, the answer keeps next_action poll and repeats retry_after_seconds. Do not assume a short fixed deadline: a human may take minutes.
+While processing, the answer keeps next_action poll and repeats retry_after_seconds. It carries admitted_at, sla_deadline, and grace_deadline, so the agent can plan its polling. Do not assume a short fixed deadline: a chain can wait up to 24 hours for its human.
 
-When the human has answered, status becomes ready and the result is still locked.
+When the human has answered, status becomes ready and the result is still locked. The answer states exactly what the unlock costs and why. Here the human answered after the SLA window, so the grace price applies:
 
 ```
 {
   "verify_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+  "work_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+  "contract_version": 3,
   "status": "ready",
   "verdict": null,
   "explanation": null,
   "response": null,
-  "responded_at": "2026-07-18T09:04:12.000Z",
+  "admitted_at": "2026-10-01T09:00:02+00:00",
+  "sla_deadline": "2026-10-01T10:00:02+00:00",
+  "grace_deadline": "2026-10-02T09:00:02+00:00",
+  "ready_at": "2026-10-01T13:12:40+00:00",
+  "responded_at": "2026-10-01T13:12:40+00:00",
   "next_action": "unlock",
+  "unlock_url": "https://verifi.cloud/verify-unlock?id=0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
   "unlock": {
     "method": "POST",
     "url": "/verify-unlock?id=0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
-    "price_usdc": "2.90",
+    "price_usdc": null,
     "payment_required": true,
-    "funded_by": "x402"
+    "funded_by": "x402",
+    "network": "eip155:8453",
+    "asset": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
+    "asset_symbol": "EURC",
+    "amount_atomic": "1450000",
+    "amount_decimal": "1.45",
+    "applied_window": "grace"
+  },
+  "service_window": {
+    "applied": "grace",
+    "sla_deadline": "2026-10-01T10:00:02+00:00",
+    "grace_deadline": "2026-10-02T09:00:02+00:00",
+    "network": "eip155:8453",
+    "asset": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
+    "unlock_amount": "1450000"
   }
 }
 ```
 
-Step 3, unlock. Without an entitlement this answers 402 with the gate 2 requirement for 2.90 USDC. Sign it and repeat, exactly like gate 1.
+The same answer on a USDC chain inside the SLA window has service_window.applied "sla", unlock_amount "3400000", unlock.amount_decimal "3.40", and unlock.price_usdc "3.40".
+
+Step 3, unlock. This answers 402 with exactly one exact requirement: the asset the admission was paid in, at service_window.unlock_amount. Its extensions["service-windows"].info repeats the terms_id, the applied window, admitted_at, ready_at, network, asset, and unlock_amount, so the agent can check the arithmetic against the terms it paid for at admission. Refuse to sign if the asset differs or the amount is higher than the bound amount for the applied window. An admission credit does not cover this gate.
+
+```
+curl -sS -X POST 'https://verifi.cloud/verify-unlock?id=0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11'
+```
+
+Decoded PAYMENT-REQUIRED header of that 402 (the body is empty, the extension's schema field is omitted):
+
+```
+{
+  "x402Version": 2,
+  "error": "Payment required",
+  "resource": {
+    "url": "https://verifi.cloud/verify-unlock?id=0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+    "description": "Gates 2 and 3 of the same Verifi chain. Unlock its ready human result at the SLA or grace price decided when the human answered, in the asset the admission was paid in.",
+    "mimeType": "application/json"
+  },
+  "accepts": [
+    {
+      "scheme": "exact",
+      "network": "eip155:8453",
+      "amount": "1450000",
+      "asset": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
+      "payTo": "0xTHE_RECEIVING_ADDRESS",
+      "maxTimeoutSeconds": 300,
+      "extra": { "name": "EURC", "version": "2", "terms_id": "st_5f0c2a9e4b7d13a8c6e1f042" }
+    }
+  ],
+  "extensions": {
+    "service-windows": {
+      "info": {
+        "version": 1,
+        "terms_id": "st_5f0c2a9e4b7d13a8c6e1f042",
+        "applied": "grace",
+        "admitted_at": "2026-10-01T09:00:02+00:00",
+        "ready_at": "2026-10-01T13:12:40+00:00",
+        "network": "eip155:8453",
+        "asset": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
+        "unlock_amount": "1450000"
+      }
+    }
+  }
+}
+```
+
+Sign it and repeat, exactly like gate 1.
 
 ```
 curl -sS -X POST 'https://verifi.cloud/verify-unlock?id=0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11' \
   -H 'PAYMENT-SIGNATURE: <base64 signed x402 authorization>'
 ```
 
-200 answer, completed. The result body is released only after the gate 2 settlement succeeds.
+200 answer, completed. The result body is released only after the unlock settlement succeeds. unlocked_at is still null in this answer and is set on later polls.
 
 ```
 {
   "verify_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+  "work_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+  "contract_version": 3,
   "status": "completed",
   "human_status": "refined",
   "verdict": "refined",
   "explanation": "Correct except the date. Pricing starts 1 October, not 1 September.",
   "response": "Correct except the date. Pricing starts 1 October, not 1 September.",
-  "response_time_ms": 252000,
+  "response_time_ms": 15278000,
   "wallet_address": "0x1111111111111111111111111111111111111111",
   "funding": {
     "entry_source": "x402",
     "free_use_number": null,
-    "entry_list_price_usdc": "0.10",
-    "entry_charged_usdc": "0.10",
+    "asset": { "network": "eip155:8453", "address": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42", "symbol": "EURC", "decimals": 6 },
+    "entry_amount_atomic": "100000",
+    "entry_charged_atomic": "100000",
     "unlock_source": "x402",
-    "unlock_list_price_usdc": "2.90",
-    "unlock_charged_usdc": "2.90",
-    "total_list_price_usdc": "3.00",
-    "total_charged_usdc": "3.00"
+    "unlock_window": "grace",
+    "unlock_amount_atomic": "1450000",
+    "unlock_charged_atomic": "1450000",
+    "total_amount_atomic": "1550000",
+    "total_charged_atomic": "1550000",
+    "entry_list_price_usdc": null,
+    "entry_charged_usdc": null,
+    "unlock_list_price_usdc": null,
+    "unlock_charged_usdc": null,
+    "total_list_price_usdc": null,
+    "total_charged_usdc": null
   },
-  "unlocked_at": "2026-07-18T09:05:01.000Z",
+  "admitted_at": "2026-10-01T09:00:02+00:00",
+  "ready_at": "2026-10-01T13:12:40+00:00",
+  "unlocked_at": null,
   "next_action": "done"
 }
 ```
+
+The answer also repeats created_at, the deadlines, expires_at, responded_at, and terms, shortened here. On a USDC chain unlocked at the SLA price the funding reads entry_charged_atomic "120000", unlock_charged_atomic "3400000", total_charged_atomic "3520000", and total_charged_usdc "3.52".
 
 Unlocking twice does not charge twice. Once the chain is completed, the answer is returned without a new payment.
 
 ## Failed chain
 
+A chain nobody answers within the last window returns:
+
 ```
 {
   "verify_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+  "work_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+  "contract_version": 3,
   "status": "failed",
   "next_action": "stop",
   "failure": {
     "reason": "human_timeout",
     "entry_credit_granted": true,
-    "entry_credit_value_usdc": "0.10"
+    "entry_credit_value_usdc": null,
+    "entry_credit": "next_admission"
   }
 }
 ```
 
+entry_credit_value_usdc is the admission price on a USDC chain, for example "0.12", and null on an EURC chain. entry_credit is null when no credit was granted.
+
 reason values:
 
-- human_timeout: nobody answered within 60 minutes.
+- human_timeout: nobody answered within the last window, 24 hours after admitted_at. The public status stays failed, as in contract 2, so agents that stop on failed keep working.
 - entry_not_settled: the gate 1 settlement never arrived, so the chain never entered the queue.
 - processing_failed: the chain ended without a redeemable result for another reason.
 
@@ -223,19 +426,31 @@ Stop after failed. Do not retry the same verify_id: start a new chain.
 
 ## Credit funded chain
 
-A chain whose gate 1 is funded by a failure_credit looks identical, only the funding block differs. Gate 1 is charged 0.00, and gate 2 still costs 2.90 USDC.
+A chain whose gate 1 is funded by a failure_credit looks identical, only the funding block differs. It is bound to the asset of the chain that earned the credit, and it is admitted at once, so admitted_at and the deadlines are set on its 202. Gate 1 is charged 0, and the unlock is paid at the SLA or the grace price. On a USDC chain:
 
 ```
 "funding": {
   "entry_source": "failure_credit",
   "free_use_number": null,
+  "asset": { "network": "eip155:8453", "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "symbol": "USDC", "decimals": 6 },
+  "entry_amount_atomic": "120000",
+  "entry_charged_atomic": "0",
+  "unlock_source": null,
+  "unlock_window": null,
+  "unlock_amount_atomic": "3400000",
+  "unlock_charged_atomic": "0",
+  "total_amount_atomic": "3520000",
+  "total_charged_atomic": "0",
+  "entry_list_price_usdc": "0.12",
   "entry_charged_usdc": "0.00",
-  "unlock_charged_usdc": "2.90",
-  "total_charged_usdc": "2.90"
+  "unlock_list_price_usdc": "3.40",
+  "unlock_charged_usdc": "0.00",
+  "total_list_price_usdc": "3.52",
+  "total_charged_usdc": "0.00"
 }
 ```
 
-When status is ready on a credit funded chain, unlock.payment_required is true for 2.90 USDC and funded_by is x402. Gate 2 is paid exactly like any other chain.
+When status is ready on a credit funded chain, unlock.payment_required is true and funded_by is x402. The unlock is paid exactly like on any other chain.
 
 ## Callbacks
 
@@ -243,24 +458,41 @@ Pass callback_url on POST /verify to avoid an active polling loop.
 
 Events: verify.ready and verify.failed. Delivery is an HTTPS POST with a JSON body, at least once, up to 3 attempts, backoff 0s, 60s, 300s. Any 2xx counts as delivered. The response body is ignored.
 
-The callback never carries the locked result. It tells you the next action.
+The callback never carries the locked result. It tells you the next action, and on a ready chain the applied window and the unlock price.
 
 ```
 {
   "event": "verify.ready",
   "verify_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+  "work_id": "0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+  "contract_version": 3,
   "status": "ready",
   "verdict": null,
   "explanation": null,
   "response": null,
   "next_action": "unlock",
   "poll_url": "/verify/0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
-  "responded_at": "2026-07-18T09:04:12.000Z",
+  "responded_at": "2026-10-01T13:12:40+00:00",
   "unlock": {
     "method": "POST",
     "url": "/verify-unlock?id=0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
-    "price_usdc": "2.90",
-    "payment_required": true
+    "price_usdc": null,
+    "payment_required": true,
+    "network": "eip155:8453",
+    "asset": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
+    "asset_symbol": "EURC",
+    "amount_atomic": "1450000",
+    "applied_window": "grace"
+  },
+  "unlock_url": "https://verifi.cloud/verify-unlock?id=0f3f7d0a-6a1c-4a1e-9d7a-2f6b5b0f9c11",
+  "ready_at": "2026-10-01T13:12:40+00:00",
+  "service_window": {
+    "applied": "grace",
+    "sla_deadline": "2026-10-01T10:00:02+00:00",
+    "grace_deadline": "2026-10-02T09:00:02+00:00",
+    "network": "eip155:8453",
+    "asset": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42",
+    "unlock_amount": "1450000"
   }
 }
 ```
@@ -269,22 +501,26 @@ A verify.failed event carries the same failure block as the polled answer.
 
 callback_url requirements: https only, default port 443, no credentials in the URL, and the hostname must resolve to a public address. Redirects are not followed. The connection is pinned to the validated address, so a hostname that changes to a private address between check and request is rejected.
 
-Persist verify_id anyway. If delivery fails after 3 attempts, polling remains the recovery path.
+Persist verify_id anyway. If delivery fails after 3 attempts, polling remains the recovery path. Treat the callback as a wake-up signal and let the unlock action confirm the current state.
 
 ## x402 payments
 
-x402 version 2, exact scheme, USDC on Base mainnet.
+x402 version 2, exact scheme, on Base mainnet, with USDC or EURC.
 
 - Network: eip155:8453 (Base mainnet)
-- Token: USDC at 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
-- Decimals: 6. So 0.10 USDC is 100000 and 2.90 USDC is 2900000.
+- USDC at 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913, EIP-712 name "USD Coin", version "2"
+- EURC at 0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42, EIP-712 name "EURC", version "2"
+- Decimals: 6 for both. So 0.10 EURC is 100000 and 1.45 EURC is 1450000.
+- The required amount is the requirement's amount field, in atomic units. extra carries the EIP-712 name and version, and the terms_id of the quote.
 - Authorization: EIP-3009 transfer with authorization. The signature covers the exact amount, the exact recipient, and a validity window, and it is valid once.
-- The buyer needs no ETH. The facilitator pays the gas and submits the settlement. USDC alone is enough.
+- The buyer needs no ETH. The facilitator pays the gas and submits the settlement. The chosen token alone is enough.
 - Funds move from the buyer wallet directly to the receiving address. They never pass through Verifi.
 
-Gate 1 and gate 2 are separate authorizations, separate settlements, and separate transaction hashes tied to the same verify_id.
+Gate 1 and the unlock are separate authorizations, separate settlements, and separate transaction hashes tied to the same verify_id, in the same asset.
 
 Flow: call the endpoint, read the 402, sign one option from accepts, repeat the identical request with PAYMENT-SIGNATURE. After a successful gate the answer carries PAYMENT-RESPONSE, a base64 receipt with the transaction hash.
+
+@x402/fetch reads the 402, signs with ExactEvmScheme, and retries automatically. Without a custom selector it pays with the first option, USDC. To pay in EURC, pass a selector that picks the option whose extra.name is "EURC".
 
 Never send a private key. Verifi only ever receives a signed, single use authorization.
 
@@ -292,25 +528,26 @@ Buyer quickstart: https://docs.x402.org/getting-started/quickstart-for-buyers
 
 ## MCP
 
-Endpoint: https://verifi.cloud/mcp, Streamable HTTP. Server name verifi, version 2.0.0.
+Endpoint: https://verifi.cloud/mcp, Streamable HTTP. Server name verifi, version 3.0.0.
 
 Tools:
 
 - verify_claim(intent, claim, agent_id, callback_url?, payment_signature?): gate 1. Returns status processing with a verify_id.
 - get_verify(verify_id): poll. Never costs money.
-- unlock_verify(verify_id, payment_signature?): gate 2. Returns the human result.
-- verifi_info(): service description, pricing, and rules. Free.
+- unlock_verify(verify_id, payment_signature?): pays the SLA or grace unlock and returns the human result.
+- verifi_info(): service description, rules, and the current terms (the same service-windows info the first 402 carries, or null if no quote can be issued right now). Free.
 
-All chains use the same tools. When a gate needs payment, the tool returns a standard x402 PaymentRequired result with x402Version, accepts, and the resource. An x402 aware MCP client signs the requirement with the requester wallet and repeats the same tool call, passing the payment through x402/payment request metadata. A successful paid call returns x402/payment-response metadata containing the settlement receipt.
+All chains use the same tools. When a gate needs payment, the tool returns a standard x402 PaymentRequired result with x402Version, accepts, extensions, and the resource. An x402 aware MCP client signs the requirement with the requester wallet and repeats the same tool call, passing the payment through x402/payment request metadata. A successful paid call returns x402/payment-response metadata containing the settlement receipt.
 
 Generic MCP clients that do not implement x402 metadata can pass the encoded authorization through the optional payment_signature argument instead.
 
-Gate 1 and gate 2 need separate signatures tied to the same verify_id. Never send a private key.
+The admission and the unlock need separate signatures tied to the same verify_id. Never send a private key.
 
 ## Rules and limits
 
 - One active chain per wallet. Submitting a second one while the first is unresolved answers 429 and charges nothing.
-- Unanswered human work expires 60 minutes after creation.
+- Unanswered human work expires at the end of the last window, 24 hours after admission. expires_at equals that deadline.
+- A quote is valid for about ten minutes (terms_valid_until).
 - intent: 1 to 2000 characters. claim: 1 to 4000 characters. Request body limit 32 kB.
 - agent_id must match ^0x[0-9a-fA-F]{40}$.
 - GET polling never costs money and never reveals a locked result.
@@ -320,20 +557,20 @@ Gate 1 and gate 2 need separate signatures tied to the same verify_id. Never sen
 ## Error codes
 
 - 400: validation failed. Bad agent_id, missing or oversized intent or claim, bad callback_url, or a verify id that is not a UUID. Fix the request.
-- 402: payment required. The body and the PAYMENT-REQUIRED header carry the x402 requirement. Sign it and repeat the identical request.
+- 402: payment required, or the paid quote expired. The PAYMENT-REQUIRED header carries the x402 requirements and, at gate 1, fresh terms; the JSON body is empty. Sign it and repeat the identical request.
 - 404: unknown verify_id.
-- 409: lifecycle conflict. Unlock was called before the human answered, or on a failed chain, or the wallet's entitlement was consumed by a concurrent request. Read the error and status fields.
+- 409: lifecycle conflict. Unlock was called before the human answered, or on a failed chain, or the wallet's credit was consumed by a concurrent request, or the paid terms could not be bound. Read the error and status fields. Nothing was charged.
 - 429: the wallet already has an active chain. Wait for it to complete or fail. Nothing was charged.
 - 502: the verification backend is temporarily unavailable. Nothing was charged. Retry.
-- 503: the human queue is full, or a paid gate is not configured. Honor Retry-After. Nothing was charged.
+- 503: the human queue is full, pricing is temporarily unavailable (no quote can be issued right now), or a paid gate is not configured. Honor Retry-After. Nothing was charged.
 
 ## Audit and data
 
 PostgreSQL is the single source of truth. Every process survives a restart: there is no in-memory state.
 
-Stored per chain: wallet address, request content, both list prices, both charged amounts, both settlement transaction hashes, the payer for each gate, lifecycle timestamps, failure credits with their source chain and their consuming chain, and callback delivery attempts.
+Stored per chain: wallet address, request content, the bound terms, the applied window, the charged amounts in the bound asset, both settlement transaction hashes, the payer for each gate, lifecycle timestamps, failure credits with their source chain, asset, and consuming chain, and callback delivery attempts. Every quote is stored, and every ECB rate used.
 
-audit_log is append-only. Every money event writes to it: chain created, entitlement consumed, payment recorded, entitlement returned, credit granted, result unlocked, payout recorded, price changed.
+audit_log is append-only. Every money event writes to it: quote issued, ECB rate recorded, terms bound, chain created, entitlement consumed, payment recorded, applied window, entitlement returned, credit granted, result unlocked, payout recorded, commission changed.
 
 Settlements are journaled before they are applied, and a reconciliation loop finishes any settlement whose apply was interrupted, so a settled payment is not lost.
 

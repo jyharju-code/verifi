@@ -1,22 +1,22 @@
 /**
- * Agent-facing two-gate Verify API handlers.
+ * Agent-facing Verify API handlers (contract v3).
  *
- * Gate 1 admits a chain to the human queue for 0.10 USDC. Gate 2 unlocks
- * its ready result for 2.90 USDC. There is no free human work; an earned
- * failure credit can cover gate 1 of a later chain, but never gate 2.
- * Every POST returns a durable id and every result is retrieved by polling.
+ * Gate 1 admits a chain to the human queue for the quoted admission price,
+ * in USDC or EURC. Gates 2 and 3 unlock its ready result at the SLA or grace
+ * price decided when the human answered, in the same asset. There is no free
+ * human work; an earned failure credit can cover the admission of a later
+ * chain, but never an unlock. Every POST returns a durable id and every
+ * result is retrieved by polling or a callback.
  */
 import { Router } from 'express';
 import crypto from 'node:crypto';
+import { coreFetch, INSTANCE } from './core.js';
+import { paidSelection } from './terms.js';
+
+export { coreFetch };
 
 export const verifyRouter = Router();
 
-const CORE_API = process.env.CORE_API_URL ?? 'http://127.0.0.1:8700';
-const INSTANCE = process.env.INSTANCE_ID ?? 'verify-api';
-// Shared secret for the core money surface. When set, core rejects any
-// /internal call that does not carry it, so payment settlement cannot be
-// forged even if the core port becomes reachable.
-const CORE_INTERNAL_SECRET = process.env.CORE_INTERNAL_SECRET ?? '';
 const EXPIRE_MS = 60 * 60 * 1000;
 const RETRY_AFTER_S = 15;
 const RESOLVED = new Set(['accepted', 'rejected', 'refined']);
@@ -43,14 +43,6 @@ export function admissionRoute(quota) {
   if (quota.pending_count > 0) return 'active-chain';
   const entitled = quota.entitlement_admission_available ?? quota.has_entry_entitlement;
   return entitled ? 'entitlement' : 'payment-gate';
-}
-
-export async function coreFetch(path, options = {}) {
-  const headers = { 'content-type': 'application/json', ...(options.headers ?? {}) };
-  if (CORE_INTERNAL_SECRET) headers['x-internal-secret'] = CORE_INTERNAL_SECRET;
-  const resp = await fetch(`${CORE_API}${path}`, { ...options, headers });
-  const body = await resp.json().catch(() => ({}));
-  return { status: resp.status, body };
 }
 
 // ---------------------------------------------------------------------------
@@ -183,14 +175,71 @@ export function agentStatus(v, forceUnlocked = false) {
   return 'processing';
 }
 
+function publicBase() {
+  return String(process.env.PUBLIC_BASE_URL ?? 'https://verifi.cloud').replace(/\/+$/, '');
+}
+
+/** Contract v2 funding, unchanged: fixed USDC prices. */
+function fundingV2(v, forceUnlocked) {
+  const unlockCharged = forceUnlocked ? '2.90' : (v.unlock_charged_usdc ?? '0.00');
+  return {
+    entry_source: v.entry_source,
+    free_use_number: v.free_use_number ?? null,
+    entry_list_price_usdc: v.entry_list_price_usdc ?? '0.10',
+    entry_charged_usdc: v.entry_charged_usdc ?? '0.00',
+    unlock_source: forceUnlocked ? 'x402' : v.unlock_source,
+    unlock_list_price_usdc: v.unlock_list_price_usdc ?? '2.90',
+    unlock_charged_usdc: unlockCharged,
+    total_list_price_usdc: '3.00',
+    total_charged_usdc: (Number(v.entry_charged_usdc ?? 0) + Number(unlockCharged)).toFixed(2),
+  };
+}
+
+/**
+ * Contract v3 funding, in the bound asset. Atomic amounts are always given.
+ * The *_usdc fields keep their v2 meaning on a USDC chain and are null on
+ * any other asset, where a USDC number would be misleading. Until the human
+ * answers, the unlock amount is the SLA amount: the most it can be.
+ */
+function fundingV3(v, forceUnlocked) {
+  const t = v.bound_terms;
+  const decimals = t.asset_decimals;
+  const asUsdc = (atomic) => (t.asset_symbol === 'USDC' ? atomicToDecimal(atomic, decimals) : null);
+  const sum = (a, b) => (BigInt(a) + BigInt(b)).toString();
+  const entryCharged = v.entry_charged_atomic ?? '0';
+  const unlockAmount = v.unlock_amount_atomic ?? t.sla;
+  const unlockCharged = forceUnlocked ? unlockAmount : (v.unlock_charged_atomic ?? '0');
+  return {
+    entry_source: v.entry_source,
+    free_use_number: v.free_use_number ?? null,
+    asset: { network: t.network, address: t.asset, symbol: t.asset_symbol, decimals },
+    entry_amount_atomic: t.admission,
+    entry_charged_atomic: entryCharged,
+    unlock_source: forceUnlocked ? 'x402' : v.unlock_source,
+    unlock_window: v.applied_window ?? null,
+    unlock_amount_atomic: unlockAmount,
+    unlock_charged_atomic: unlockCharged,
+    total_amount_atomic: sum(t.admission, unlockAmount),
+    total_charged_atomic: sum(entryCharged, unlockCharged),
+    entry_list_price_usdc: asUsdc(t.admission),
+    entry_charged_usdc: asUsdc(entryCharged),
+    unlock_list_price_usdc: asUsdc(unlockAmount),
+    unlock_charged_usdc: asUsdc(unlockCharged),
+    total_list_price_usdc: asUsdc(sum(t.admission, unlockAmount)),
+    total_charged_usdc: asUsdc(sum(entryCharged, unlockCharged)),
+  };
+}
+
 export function publicView(v, { forceUnlocked = false } = {}) {
   const status = agentStatus(v, forceUnlocked);
   const unlocked = status === 'completed';
   const fullFree = v.entry_source === 'initial_free';
-  const unlockSource = forceUnlocked ? 'x402' : v.unlock_source;
-  const unlockCharged = forceUnlocked ? '2.90' : (v.unlock_charged_usdc ?? '0.00');
+  const v3 = v.contract_version === 3 && Boolean(v.bound_terms);
+  const t = v.bound_terms;
   const view = {
     verify_id: v.id,
+    work_id: v.id,
+    contract_version: v3 ? 3 : 2,
     status,
     human_status: unlocked ? v.status : null,
     verdict: unlocked ? v.verdict ?? null : null,
@@ -198,24 +247,18 @@ export function publicView(v, { forceUnlocked = false } = {}) {
     response: unlocked ? v.response : null,
     response_time_ms: unlocked ? v.response_time_ms : null,
     wallet_address: v.agent_id,
-    funding: {
-      entry_source: v.entry_source,
-      free_use_number: v.free_use_number ?? null,
-      entry_list_price_usdc: v.entry_list_price_usdc ?? '0.10',
-      entry_charged_usdc: v.entry_charged_usdc ?? '0.00',
-      unlock_source: unlockSource,
-      unlock_list_price_usdc: v.unlock_list_price_usdc ?? '2.90',
-      unlock_charged_usdc: unlockCharged,
-      total_list_price_usdc: '3.00',
-      total_charged_usdc: (
-        Number(v.entry_charged_usdc ?? 0) + Number(unlockCharged)
-      ).toFixed(2),
-    },
+    funding: v3 ? fundingV3(v, forceUnlocked) : fundingV2(v, forceUnlocked),
     created_at: v.created_at,
     admitted_at: v.admitted_at,
-    expires_at: v.expires_at,
+    sla_deadline: v.sla_deadline ?? null,
+    grace_deadline: v.grace_deadline ?? null,
+    ready_at: v.ready_at ?? null,
+    // A v3 chain's expiry runs from admitted_at; before settlement the row
+    // only holds a placeholder, so report none rather than a wrong time.
+    expires_at: v3 && !v.admitted_at ? null : v.expires_at,
     responded_at: v.responded_at,
     unlocked_at: v.unlocked_at,
+    terms: t ?? null,
   };
 
   if (status === 'processing') {
@@ -224,20 +267,43 @@ export function publicView(v, { forceUnlocked = false } = {}) {
     view.retry_after_seconds = RETRY_AFTER_S;
   } else if (status === 'ready') {
     view.next_action = 'unlock';
+    view.unlock_url = `${publicBase()}/verify-unlock?id=${v.id}`;
     view.unlock = {
       method: 'POST',
       url: `/verify-unlock?id=${v.id}`,
-      price_usdc: fullFree ? '0.00' : '2.90',
+      price_usdc: fullFree ? '0.00' : (v3 ? view.funding.unlock_list_price_usdc : '2.90'),
       payment_required: !fullFree,
       funded_by: fullFree ? 'initial_free' : 'x402',
     };
+    if (v3) {
+      Object.assign(view.unlock, {
+        network: t.network,
+        asset: t.asset,
+        asset_symbol: t.asset_symbol,
+        amount_atomic: v.unlock_amount_atomic,
+        amount_decimal: atomicToDecimal(v.unlock_amount_atomic, t.asset_decimals),
+        applied_window: v.applied_window,
+      });
+      view.service_window = {
+        applied: v.applied_window,
+        sla_deadline: v.sla_deadline,
+        grace_deadline: v.grace_deadline ?? null,
+        network: t.network,
+        asset: t.asset,
+        unlock_amount: v.unlock_amount_atomic,
+      };
+    }
   } else if (status === 'failed') {
     view.next_action = 'stop';
+    const granted = Boolean(v.failure_credit_granted);
     view.failure = {
       reason: v.failure_reason ?? (v.status === 'expired' ? 'human_timeout' : 'processing_failed'),
-      entry_credit_granted: Boolean(v.failure_credit_granted),
-      entry_credit_value_usdc: v.failure_credit_granted ? '0.10' : '0.00',
+      entry_credit_granted: granted,
+      entry_credit_value_usdc: v3
+        ? (t.asset_symbol === 'USDC' ? atomicToDecimal(granted ? t.admission : 0, t.asset_decimals) : null)
+        : (granted ? '0.10' : '0.00'),
     };
+    if (v3) view.failure.entry_credit = granted ? 'next_admission' : null;
   } else {
     view.next_action = 'done';
   }
@@ -298,7 +364,14 @@ export function recordSettlementOnFinish(res, kind, getVerifyId) {
       }).catch((err) => console.error('settlement alert failed:', err.message));
     }
   };
-  const start = () => attempt(7, 2_000);
+  // finish and close both fire on a normal response; record once. Core would
+  // treat a replay as a no-op, but it is still a needless second call.
+  let started = false;
+  const start = () => {
+    if (started) return;
+    started = true;
+    attempt(7, 2_000);
+  };
   res.once('finish', start);
   res.once('close', start);
 }
@@ -329,6 +402,9 @@ export async function handleVerify(req, res) {
     }
   }
 
+  // The quote and asset this admission was paid against. Core copies that
+  // quote into the chain, so gates 2 and 3 are priced from it and nothing else.
+  const paid = req.admissionMode === 'x402' ? paidSelection(req) : null;
   const create = await coreFetch('/internal/verifies', {
     method: 'POST',
     body: JSON.stringify({
@@ -339,8 +415,19 @@ export async function handleVerify(req, res) {
       admission_mode: req.admissionMode,
       callback_url: callbackUrl ?? null,
       request_id: req.auditContext?.request_id ?? null,
+      terms_id: paid?.termsId ?? null,
+      paid_asset: paid?.asset ?? null,
     }),
   });
+  if (create.status === 409) {
+    // Only reachable if the quote vanished between the gate and this call.
+    // The 409 cancels settlement, so the signed payment is never submitted.
+    console.error('core refused the paid terms:', create.body?.detail);
+    return res.status(409).json({
+      error: 'the paid terms could not be bound',
+      detail: 'Retry POST /verify for a fresh quote. No payment was taken.',
+    });
+  }
   if (create.status === 402) {
     return res.status(409).json({
       error: 'entry entitlement was consumed by another request',
@@ -353,16 +440,17 @@ export async function handleVerify(req, res) {
       detail: 'Poll the previous verify until it is completed or failed.',
     });
   }
-  // The core refuses a full queue before it inserts the row and before it
-  // consumes an entitlement, so nothing is spent here. On the x402 path this
-  // 503 also cancels settlement, so the entry payment is never submitted and
-  // the caller keeps its 0.10 USDC. No credit or refund is needed.
+  // The core refuses a full queue, a paused instance, and a credit admission
+  // it cannot price before it inserts the row and before it consumes an
+  // entitlement, so nothing is spent here. On the x402 path this 503 also
+  // cancels settlement, so the entry payment is never submitted. No credit or
+  // refund is needed.
   if (create.status === 503) {
-    res.set('Retry-After', '120');
-    return res.status(503).json({
-      error: 'human queue is full',
-      detail: 'Retry in a couple of minutes. No payment was taken.',
-    });
+    const queueFull = /queue is full/i.test(String(create.body?.detail ?? ''));
+    res.set('Retry-After', queueFull ? '120' : '60');
+    return res.status(503).json(queueFull
+      ? { error: 'human queue is full', detail: 'Retry in a couple of minutes. No payment was taken.' }
+      : { error: 'admission is temporarily unavailable', detail: 'Retry shortly. No payment was taken.' });
   }
   if (create.status !== 200) {
     console.error('core create failed:', create.status, create.body);
@@ -387,14 +475,38 @@ export async function handleVerify(req, res) {
   }
 
   res.set('Retry-After', String(RETRY_AFTER_S));
-  const admitted = req.admissionMode === 'x402'
-    ? { ...create.body, entry_charged_usdc: '0.10' }
-    : create.body;
+  // x402 releases this body only after the entry settles, but it was built
+  // before: the row still shows the entry as unpaid and the windows as not
+  // started. Report the charge the settlement is about to record. The
+  // deadlines stay null here and appear on the first poll, because they run
+  // from admitted_at, which is the settlement itself.
+  const admitted = req.admissionMode === 'x402' ? settledEntryView(create.body) : create.body;
   return res.status(202).json({
     ...publicView(admitted),
-    response_timeout_ms: EXPIRE_MS,
+    response_timeout_ms: responseTimeoutMs(create.body),
     message: 'Admission accepted. Poll until status is ready or failed.',
   });
+}
+
+function settledEntryView(v) {
+  if (v.contract_version !== 3) return { ...v, entry_charged_usdc: '0.10' };
+  return { ...v, entry_charged_atomic: v.entry_amount_atomic };
+}
+
+/** How long the chain may wait for its human, from its bound windows. */
+export function responseTimeoutMs(v) {
+  const windows = v.bound_terms?.windows;
+  if (!windows) return EXPIRE_MS;
+  return (windows.grace ?? windows.sla).within_seconds * 1000;
+}
+
+/** Atomic units to a fixed decimal string, without floating point. */
+export function atomicToDecimal(atomic, decimals) {
+  if (atomic === null || atomic === undefined) return null;
+  const digits = BigInt(atomic).toString().padStart(decimals + 1, '0');
+  const whole = digits.slice(0, -decimals);
+  const frac = digits.slice(-decimals).replace(/0+$/, '');
+  return `${whole}.${frac.padEnd(2, '0')}`;
 }
 
 verifyRouter.get('/verify/:id', async (req, res) => {

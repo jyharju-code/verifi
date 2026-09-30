@@ -41,7 +41,7 @@ COMMANDS = [
     BotCommand("busy", "Mark yourself busy"),
     BotCommand("balance", "Show your earnings"),
     BotCommand("history", "Recent verifies and payouts"),
-    BotCommand("address", "Set your USDC address"),
+    BotCommand("address", "Set your payout address on Base"),
     BotCommand("payout", "Choose payout method: bank or crypto"),
 ]
 

@@ -5,7 +5,7 @@ Verifi has two on-chain addresses that matter operationally:
   gas wallet      pays the gas for x402 settlements. Its private key lives
                   only in the facilitator container's environment. If it runs
                   dry, every paid gate stops settling and revenue stops.
-  receiving wallet where buyer USDC lands. No key for it exists anywhere in
+  receiving wallet where buyer USDC and EURC land. No key for it exists anywhere in
                   the system.
 
 This module reads balances over a public Base RPC using the public addresses
@@ -29,9 +29,13 @@ X402_PAY_TO = os.environ.get("X402_PAY_TO", "").strip()
 
 BASE_RPC_URL = os.environ.get("BASE_RPC_URL", "https://mainnet.base.org")
 BASE_EXPLORER = "https://basescan.org/address/"
-# USDC on Base mainnet, 6 decimals.
+# USDC and EURC on Base mainnet, 6 decimals each.
 USDC_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 USDC_DECIMALS = 6
+EURC_CONTRACT = "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42"
+EURC_DECIMALS = 6
+# The token contracts a Verifi settlement can call.
+SETTLEMENT_TOKENS = {USDC_CONTRACT.lower(): "USDC", EURC_CONTRACT.lower(): "EURC"}
 # balanceOf(address)
 ERC20_BALANCE_OF = "0x70a08231"
 
@@ -103,10 +107,65 @@ async def _eth_balance(client: httpx.AsyncClient, address: str) -> float | None:
     return _from_hex(await _rpc(client, "eth_getBalance", [address, "latest"]), 18)
 
 
-async def _usdc_balance(client: httpx.AsyncClient, address: str) -> float | None:
+async def _token_balance(client: httpx.AsyncClient, token: str, decimals: int, address: str) -> float | None:
     data = ERC20_BALANCE_OF + address[2:].lower().rjust(64, "0")
-    result = await _rpc(client, "eth_call", [{"to": USDC_CONTRACT, "data": data}, "latest"])
-    return _from_hex(result, USDC_DECIMALS)
+    result = await _rpc(client, "eth_call", [{"to": token, "data": data}, "latest"])
+    return _from_hex(result, decimals)
+
+
+async def _usdc_balance(client: httpx.AsyncClient, address: str) -> float | None:
+    return await _token_balance(client, USDC_CONTRACT, USDC_DECIMALS, address)
+
+
+async def _eurc_balance(client: httpx.AsyncClient, address: str) -> float | None:
+    return await _token_balance(client, EURC_CONTRACT, EURC_DECIMALS, address)
+
+
+# Selectors for the token reads used by check_token_metadata.
+_SEL_NAME = "0x06fdde03"
+_SEL_VERSION = "0x54fd4d50"
+_SEL_DECIMALS = "0x313ce567"
+
+
+def _abi_string(result: str | None) -> str | None:
+    """Decode a single ABI-encoded string return value."""
+    if not result or not result.startswith("0x"):
+        return None
+    try:
+        raw = bytes.fromhex(result[2:])
+        offset = int.from_bytes(raw[0:32], "big")
+        length = int.from_bytes(raw[offset:offset + 32], "big")
+        return raw[offset + 32: offset + 32 + length].decode("utf-8")
+    except (ValueError, IndexError, UnicodeDecodeError):
+        return None
+
+
+async def check_token_metadata(asset) -> tuple[bool | None, str]:
+    """Compare a configured token's EIP-712 name, version and decimals with the chain.
+
+    x402 settles with an EIP-3009 authorization whose EIP-712 domain uses the
+    name and version from the payment requirement. A wrong value means every
+    payment in that asset fails verification, so a mismatch is worth an alert.
+    Returns (True, ok) on a match, (False, detail) on a mismatch, and
+    (None, detail) when the chain could not be asked, which is not a failure.
+    """
+    async with httpx.AsyncClient(timeout=10) as client:
+        reads = {}
+        for field, selector in (("name", _SEL_NAME), ("version", _SEL_VERSION), ("decimals", _SEL_DECIMALS)):
+            reads[field] = await _rpc(client, "eth_call", [{"to": asset.address, "data": selector}, "latest"])
+            if reads[field] is None:
+                return None, f"could not read {field}() of {asset.symbol}"
+    onchain = {
+        "name": _abi_string(reads["name"]),
+        "version": _abi_string(reads["version"]),
+        "decimals": int(reads["decimals"], 16) if reads["decimals"] else None,
+    }
+    configured = {"name": asset.eip712_name, "version": asset.eip712_version, "decimals": asset.decimals}
+    mismatches = [f"{k} on chain {onchain[k]!r}, configured {configured[k]!r}"
+                  for k in configured if onchain[k] != configured[k]]
+    if mismatches:
+        return False, f"{asset.symbol} {asset.address}: " + "; ".join(mismatches)
+    return True, f"{asset.symbol} matches: {asset.eip712_name} v{asset.eip712_version}, {asset.decimals} decimals"
 
 
 TX_HASH = re.compile(r"^0x[0-9a-fA-F]{64}$")
@@ -145,9 +204,10 @@ async def verify_transaction_onchain(tx_hash: str) -> tuple[bool | None, str]:
     if not tx.get("blockNumber"):
         return None, "pending, not mined yet"
     to = (tx.get("to") or "").lower()
-    if to != USDC_CONTRACT.lower():
-        return True, f"mined, but sent to {to} rather than the USDC contract"
-    return True, "mined, USDC contract"
+    token = SETTLEMENT_TOKENS.get(to)
+    if token is None:
+        return True, f"mined, but sent to {to} rather than a USDC or EURC contract"
+    return True, f"mined, {token} contract"
 
 
 async def wallet_status() -> dict:
@@ -172,6 +232,7 @@ async def wallet_status() -> dict:
             "address": X402_PAY_TO or None,
             "explorer": (BASE_EXPLORER + X402_PAY_TO) if X402_PAY_TO else None,
             "usdc": None,
+            "eurc": None,
             "state": "unknown",
         },
         "network": "Base mainnet (eip155:8453)",
@@ -194,6 +255,7 @@ async def wallet_status() -> dict:
         if EVM_ADDRESS.match(X402_PAY_TO or ""):
             usdc = await _usdc_balance(client, X402_PAY_TO)
             status["receiving_wallet"]["usdc"] = usdc
+            status["receiving_wallet"]["eurc"] = await _eurc_balance(client, X402_PAY_TO)
             status["receiving_wallet"]["state"] = "unknown" if usdc is None else "ok"
 
     from datetime import datetime, timezone

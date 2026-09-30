@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from core import config, pricing
 from core.audit import audit
 from core.db.database import get_pool
 
@@ -27,12 +28,29 @@ MAX_ATTEMPTS = 3
 RETRY_BACKOFF_S = [0, 60, 300]
 
 
+def _usdc_or_none(terms: dict, atomic) -> str | None:
+    """A decimal USDC string on a USDC chain, None on any other asset."""
+    if terms["asset_symbol"] != "USDC" or atomic is None:
+        return None
+    return f"{pricing.from_atomic(int(atomic), int(terms['asset_decimals'])):.2f}"
+
+
 def _public_payload(row) -> dict:
+    """The callback body. It never carries the locked result.
+
+    For a contract v3 chain it carries the same window facts as the status
+    view: when the human answered, which window applied, and the unlock
+    price in the bound asset. *_usdc fields are null on non-USDC chains.
+    """
     failed = row["status"] in ("expired", "failed")
     full_free = row["entry_source"] == "initial_free"
+    v3 = row.get("contract_version") == 3 and row.get("bound_terms") is not None
+    terms = pricing.as_json(row["bound_terms"]) if v3 else None
     payload = {
         "event": "verify.failed" if failed else "verify.ready",
         "verify_id": str(row["id"]),
+        "work_id": str(row["id"]),
+        "contract_version": 3 if v3 else 2,
         "status": "failed" if failed else "ready",
         "verdict": None,
         "explanation": None,
@@ -42,18 +60,47 @@ def _public_payload(row) -> dict:
         "responded_at": row["responded_at"].isoformat() if row["responded_at"] else None,
     }
     if failed:
+        granted = bool(row["failure_credit_granted"])
         payload["failure"] = {
             "reason": row["failure_reason"] or "processing_failed",
-            "entry_credit_granted": row["failure_credit_granted"],
-            "entry_credit_value_usdc": "0.10" if row["failure_credit_granted"] else "0.00",
+            "entry_credit_granted": granted,
+            "entry_credit_value_usdc": (
+                _usdc_or_none(terms, terms["admission"] if granted else 0)
+                if v3 else ("0.10" if granted else "0.00")
+            ),
         }
+        if v3:
+            payload["failure"]["entry_credit"] = "next_admission" if granted else None
     else:
         payload["unlock"] = {
             "method": "POST",
             "url": f"/verify-unlock?id={row['id']}",
-            "price_usdc": "0.00" if full_free else "2.90",
+            "price_usdc": (
+                "0.00" if full_free
+                else _usdc_or_none(terms, row["unlock_amount_atomic"]) if v3
+                else "2.90"
+            ),
             "payment_required": not full_free,
         }
+        if v3:
+            unlock_amount = pricing.atomic_str(row["unlock_amount_atomic"])
+            payload["unlock_url"] = f"{config.PUBLIC_BASE_URL.rstrip('/')}/verify-unlock?id={row['id']}"
+            payload["ready_at"] = row["ready_at"].isoformat() if row["ready_at"] else None
+            payload["unlock"].update({
+                "network": terms["network"],
+                "asset": terms["asset"],
+                "asset_symbol": terms["asset_symbol"],
+                "amount_atomic": unlock_amount,
+                "applied_window": row["applied_window"],
+            })
+            payload["service_window"] = {
+                "applied": row["applied_window"],
+                "sla_deadline": row["sla_deadline"].isoformat() if row["sla_deadline"] else None,
+                "grace_deadline": row["grace_deadline"].isoformat() if row["grace_deadline"] else None,
+                "network": terms["network"],
+                "asset": terms["asset"],
+                "unlock_amount": unlock_amount,
+            }
     return payload
 
 

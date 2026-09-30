@@ -1,19 +1,28 @@
-"""Bot-side payout logic behind the admin commands /maksa and /maksettu."""
+"""Bot-side payout logic behind the admin commands /maksa and /maksettu.
+
+Balances are kept per asset and paid per asset, never converted. The awal
+CLI sends USDC only, so a ready command is printed for USDC balances; an
+EURC balance gets a manual instruction instead.
+"""
 import logging
 from decimal import Decimal, InvalidOperation
 
+from core.audit import audit
+from core.bot.handlers.associate import amount_in
 from core.db.database import get_pool
 from core.payments import payout, settlement
 
 log = logging.getLogger(__name__)
 
+ASSETS = ("USDC", "EURC")
 
-def _money(amount) -> str:
-    return f"${float(amount):.2f}"
+
+def _method(method: str) -> str:
+    return "on Base" if method == "crypto" else "bank transfer"
 
 
 async def pending_report() -> str:
-    """Text for /maksa: who is owed what, with a ready awal command when possible."""
+    """Text for /maksa: who is owed what in which asset, with a ready command when possible."""
     db = await get_pool()
     async with db.acquire() as conn:
         rows = await settlement.pending_balances(conn)
@@ -22,22 +31,35 @@ async def pending_report() -> str:
     lines = ["💸 Unpaid balances:\n"]
     for r in rows:
         handle = f"@{r['username']}" if r["username"] else r["name"]
-        lines.append(f"{handle}: {_money(r['pending'])} ({'USDC' if r['payout_method'] == 'crypto' else 'bank transfer'})")
-        if r["payout_method"] == "crypto" and r["wallet_address"]:
-            cmd = payout.awal_command(float(r["pending"]), r["wallet_address"])
+        payable = settlement.Balance(r["id"], r["asset"], 6, Decimal(r["earned"]), Decimal(r["paid"])).payable
+        lines.append(f"{handle}: {amount_in(r['pending'], r['asset'])} ({_method(r['payout_method'])})")
+        if r["payout_method"] != "crypto" or not r["wallet_address"] or payable <= 0:
+            continue
+        if r["asset"] == "USDC":
+            cmd = payout.awal_command(float(payable), r["wallet_address"])
             lines.append(f"  {' '.join(cmd)}")
-    lines.append("\nMark as paid: /paid @name $amount")
+        else:
+            lines.append(
+                f"  Send {payable} {r['asset']} on Base to {r['wallet_address']} by hand "
+                f"(awal sends USDC only)."
+            )
+    lines.append("\nMark as paid: /paid @name 42 [USDC|EURC], USDC by default")
     return "\n".join(lines)
 
 
-async def mark_paid(username: str, amount_text: str) -> str:
-    """Handle /maksettu @username $42. Returns the reply text."""
+async def mark_paid(username: str, amount_text: str, asset_text: str | None = None) -> str:
+    """Handle /maksettu @username 42 [EURC]. Returns the reply text."""
+    asset = (asset_text or "USDC").upper()
+    if asset not in ASSETS:
+        return f"Unknown asset {asset_text}. Use USDC or EURC."
     try:
         amount = Decimal(amount_text.lstrip("$").replace(",", "."))
     except InvalidOperation:
-        return "Invalid amount. Use the form /paid @name $42"
+        return "Invalid amount. Use the form /paid @name 42 [USDC|EURC]"
     if amount <= 0:
         return "The amount must be greater than zero."
+    if amount != amount.quantize(Decimal("0.01")):
+        return "Payouts are recorded in whole cents."
 
     db = await get_pool()
     assoc = await db.fetchrow(
@@ -46,24 +68,34 @@ async def mark_paid(username: str, amount_text: str) -> str:
     )
     if assoc is None:
         return f"No associate found for @{username.lstrip('@')}."
-    pending = assoc["earnings"] - assoc["paid_total"]
-    if amount > pending:
-        return f"@{assoc['username']} is only owed {_money(pending)}. Payout not recorded."
 
     async with db.acquire() as conn:
-        await settlement.record_payout(conn, assoc["id"], amount, assoc["payout_method"])
-    from core.audit import audit
+        async with conn.transaction():
+            # Serialize payouts per associate so two /paid commands cannot both
+            # pass the balance check.
+            await conn.execute("SELECT id FROM associates WHERE id = $1 FOR UPDATE", assoc["id"])
+            balance = next((b for b in await settlement.balances(conn, assoc["id"]) if b.asset == asset), None)
+            pending = balance.pending if balance else Decimal("0")
+            if amount > pending:
+                return f"@{assoc['username']} is only owed {amount_in(pending, asset)}. Payout not recorded."
+            await settlement.record_payout(conn, assoc["id"], amount, assoc["payout_method"], asset=asset)
 
     await audit(
         "bot",
         "payout_recorded",
-        {"associate_id": assoc["id"], "username": assoc["username"], "amount_usd": str(amount), "method": assoc["payout_method"]},
+        {
+            "associate_id": assoc["id"],
+            "username": assoc["username"],
+            "asset": asset,
+            "amount": str(amount),
+            "amount_usd": str(amount) if asset == "USDC" else None,
+            "method": assoc["payout_method"],
+        },
         actor="admin",
     )
-    log.info("payout recorded: associate=%s amount=%s method=%s", assoc["id"], amount, assoc["payout_method"])
-    remaining = pending - amount
+    log.info("payout recorded: associate=%s amount=%s %s method=%s", assoc["id"], amount, asset, assoc["payout_method"])
     return (
-        f"✅ Recorded: {_money(amount)} paid to @{assoc['username']} "
-        f"({'USDC' if assoc['payout_method'] == 'crypto' else 'bank transfer'}).\n"
-        f"Remaining owed: {_money(remaining)}"
+        f"✅ Recorded: {amount_in(amount, asset)} paid to @{assoc['username']} "
+        f"({_method(assoc['payout_method'])}).\n"
+        f"Remaining owed: {amount_in(pending - amount, asset)}"
     )
