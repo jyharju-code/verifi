@@ -137,6 +137,7 @@ services:
       CORE_API_URL: http://core-api:8700
       CORE_INTERNAL_SECRET: ${CORE_INTERNAL_SECRET:-}
       INSTANCE_ID: verify-api
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://verifi.cloud}
       X402_PAY_TO: ${X402_PAY_TO:-}
       X402_ASSETS: ${X402_ASSETS:-USDC,EURC}
       X402_UNLOCK_PRICE: ${X402_UNLOCK_PRICE:-$$2.90}

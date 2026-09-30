@@ -173,17 +173,71 @@ export function agentStatus(v, forceUnlocked = false) {
   return 'processing';
 }
 
+function publicBase() {
+  return String(process.env.PUBLIC_BASE_URL ?? 'https://verifi.cloud').replace(/\/+$/, '');
+}
+
+/** Contract v2 funding, unchanged: fixed USDC prices. */
+function fundingV2(v, forceUnlocked) {
+  const unlockCharged = forceUnlocked ? '2.90' : (v.unlock_charged_usdc ?? '0.00');
+  return {
+    entry_source: v.entry_source,
+    free_use_number: v.free_use_number ?? null,
+    entry_list_price_usdc: v.entry_list_price_usdc ?? '0.10',
+    entry_charged_usdc: v.entry_charged_usdc ?? '0.00',
+    unlock_source: forceUnlocked ? 'x402' : v.unlock_source,
+    unlock_list_price_usdc: v.unlock_list_price_usdc ?? '2.90',
+    unlock_charged_usdc: unlockCharged,
+    total_list_price_usdc: '3.00',
+    total_charged_usdc: (Number(v.entry_charged_usdc ?? 0) + Number(unlockCharged)).toFixed(2),
+  };
+}
+
+/**
+ * Contract v3 funding, in the bound asset. Atomic amounts are always given.
+ * The *_usdc fields keep their v2 meaning on a USDC chain and are null on
+ * any other asset, where a USDC number would be misleading. Until the human
+ * answers, the unlock amount is the SLA amount: the most it can be.
+ */
+function fundingV3(v, forceUnlocked) {
+  const t = v.bound_terms;
+  const decimals = t.asset_decimals;
+  const asUsdc = (atomic) => (t.asset_symbol === 'USDC' ? atomicToDecimal(atomic, decimals) : null);
+  const sum = (a, b) => (BigInt(a) + BigInt(b)).toString();
+  const entryCharged = v.entry_charged_atomic ?? '0';
+  const unlockAmount = v.unlock_amount_atomic ?? t.sla;
+  const unlockCharged = forceUnlocked ? unlockAmount : (v.unlock_charged_atomic ?? '0');
+  return {
+    entry_source: v.entry_source,
+    free_use_number: v.free_use_number ?? null,
+    asset: { network: t.network, address: t.asset, symbol: t.asset_symbol, decimals },
+    entry_amount_atomic: t.admission,
+    entry_charged_atomic: entryCharged,
+    unlock_source: forceUnlocked ? 'x402' : v.unlock_source,
+    unlock_window: v.applied_window ?? null,
+    unlock_amount_atomic: unlockAmount,
+    unlock_charged_atomic: unlockCharged,
+    total_amount_atomic: sum(t.admission, unlockAmount),
+    total_charged_atomic: sum(entryCharged, unlockCharged),
+    entry_list_price_usdc: asUsdc(t.admission),
+    entry_charged_usdc: asUsdc(entryCharged),
+    unlock_list_price_usdc: asUsdc(unlockAmount),
+    unlock_charged_usdc: asUsdc(unlockCharged),
+    total_list_price_usdc: asUsdc(sum(t.admission, unlockAmount)),
+    total_charged_usdc: asUsdc(sum(entryCharged, unlockCharged)),
+  };
+}
+
 export function publicView(v, { forceUnlocked = false } = {}) {
   const status = agentStatus(v, forceUnlocked);
   const unlocked = status === 'completed';
   const fullFree = v.entry_source === 'initial_free';
-  const unlockSource = forceUnlocked ? 'x402' : v.unlock_source;
-  const unlockCharged = forceUnlocked ? '2.90' : (v.unlock_charged_usdc ?? '0.00');
-  // A *_usdc field on a chain bound to another asset would be a misleading
-  // number, so it is null there. The asset-neutral fields carry the amount.
-  const usdcOnly = (value) => (v.contract_version === 3 && !isUsdcChain(v) ? null : value);
+  const v3 = v.contract_version === 3 && Boolean(v.bound_terms);
+  const t = v.bound_terms;
   const view = {
     verify_id: v.id,
+    work_id: v.id,
+    contract_version: v3 ? 3 : 2,
     status,
     human_status: unlocked ? v.status : null,
     verdict: unlocked ? v.verdict ?? null : null,
@@ -191,28 +245,16 @@ export function publicView(v, { forceUnlocked = false } = {}) {
     response: unlocked ? v.response : null,
     response_time_ms: unlocked ? v.response_time_ms : null,
     wallet_address: v.agent_id,
-    funding: {
-      entry_source: v.entry_source,
-      free_use_number: v.free_use_number ?? null,
-      entry_list_price_usdc: v.entry_list_price_usdc ?? '0.10',
-      entry_charged_usdc: usdcOnly(v.entry_charged_usdc ?? '0.00'),
-      unlock_source: unlockSource,
-      unlock_list_price_usdc: v.unlock_list_price_usdc ?? '2.90',
-      unlock_charged_usdc: unlockCharged,
-      total_list_price_usdc: '3.00',
-      total_charged_usdc: (
-        Number(v.entry_charged_usdc ?? 0) + Number(unlockCharged)
-      ).toFixed(2),
-    },
+    funding: v3 ? fundingV3(v, forceUnlocked) : fundingV2(v, forceUnlocked),
     created_at: v.created_at,
     admitted_at: v.admitted_at,
+    sla_deadline: v.sla_deadline ?? null,
+    grace_deadline: v.grace_deadline ?? null,
+    ready_at: v.ready_at ?? null,
     expires_at: v.expires_at,
     responded_at: v.responded_at,
     unlocked_at: v.unlocked_at,
-    contract_version: v.contract_version ?? 2,
-    sla_deadline: v.sla_deadline ?? null,
-    grace_deadline: v.grace_deadline ?? null,
-    terms: v.bound_terms ?? null,
+    terms: t ?? null,
   };
 
   if (status === 'processing') {
@@ -221,20 +263,43 @@ export function publicView(v, { forceUnlocked = false } = {}) {
     view.retry_after_seconds = RETRY_AFTER_S;
   } else if (status === 'ready') {
     view.next_action = 'unlock';
+    view.unlock_url = `${publicBase()}/verify-unlock?id=${v.id}`;
     view.unlock = {
       method: 'POST',
       url: `/verify-unlock?id=${v.id}`,
-      price_usdc: fullFree ? '0.00' : '2.90',
+      price_usdc: fullFree ? '0.00' : (v3 ? view.funding.unlock_list_price_usdc : '2.90'),
       payment_required: !fullFree,
       funded_by: fullFree ? 'initial_free' : 'x402',
     };
+    if (v3) {
+      Object.assign(view.unlock, {
+        network: t.network,
+        asset: t.asset,
+        asset_symbol: t.asset_symbol,
+        amount_atomic: v.unlock_amount_atomic,
+        amount_decimal: atomicToDecimal(v.unlock_amount_atomic, t.asset_decimals),
+        applied_window: v.applied_window,
+      });
+      view.service_window = {
+        applied: v.applied_window,
+        sla_deadline: v.sla_deadline,
+        grace_deadline: v.grace_deadline ?? null,
+        network: t.network,
+        asset: t.asset,
+        unlock_amount: v.unlock_amount_atomic,
+      };
+    }
   } else if (status === 'failed') {
     view.next_action = 'stop';
+    const granted = Boolean(v.failure_credit_granted);
     view.failure = {
       reason: v.failure_reason ?? (v.status === 'expired' ? 'human_timeout' : 'processing_failed'),
-      entry_credit_granted: Boolean(v.failure_credit_granted),
-      entry_credit_value_usdc: v.failure_credit_granted ? '0.10' : '0.00',
+      entry_credit_granted: granted,
+      entry_credit_value_usdc: v3
+        ? (t.asset_symbol === 'USDC' ? atomicToDecimal(granted ? t.admission : 0, t.asset_decimals) : null)
+        : (granted ? '0.10' : '0.00'),
     };
+    if (v3) view.failure.entry_credit = granted ? 'next_admission' : null;
   } else {
     view.next_action = 'done';
   }
@@ -295,7 +360,14 @@ export function recordSettlementOnFinish(res, kind, getVerifyId) {
       }).catch((err) => console.error('settlement alert failed:', err.message));
     }
   };
-  const start = () => attempt(7, 2_000);
+  // finish and close both fire on a normal response; record once. Core would
+  // treat a replay as a no-op, but it is still a needless second call.
+  let started = false;
+  const start = () => {
+    if (started) return;
+    started = true;
+    attempt(7, 2_000);
+  };
   res.once('finish', start);
   res.once('close', start);
 }
@@ -414,11 +486,7 @@ export async function handleVerify(req, res) {
 
 function settledEntryView(v) {
   if (v.contract_version !== 3) return { ...v, entry_charged_usdc: '0.10' };
-  return {
-    ...v,
-    entry_charged_atomic: v.entry_amount_atomic,
-    entry_charged_usdc: isUsdcChain(v) ? atomicToDecimal(v.entry_amount_atomic, 6) : null,
-  };
+  return { ...v, entry_charged_atomic: v.entry_amount_atomic };
 }
 
 /** How long the chain may wait for its human, from its bound windows. */
@@ -426,10 +494,6 @@ export function responseTimeoutMs(v) {
   const windows = v.bound_terms?.windows;
   if (!windows) return EXPIRE_MS;
   return (windows.grace ?? windows.sla).within_seconds * 1000;
-}
-
-export function isUsdcChain(v) {
-  return v.bound_terms?.asset_symbol === 'USDC';
 }
 
 /** Atomic units to a fixed decimal string, without floating point. */

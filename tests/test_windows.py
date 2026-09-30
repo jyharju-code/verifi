@@ -166,3 +166,29 @@ class BotResolveTests(WindowBase):
     async def test_the_refusal_message_names_expiry(self):
         self.assertIn("expired", verify_buttons._refusal(windows.AnswerRefused("expired")))
         self.assertIn("already handled", verify_buttons._refusal(windows.AnswerRefused("already_resolved")))
+
+
+@requires_db
+class UnlockSettlementTests(WindowBase):
+    async def unlock(self, vid, tx="0x" + "u1" * 32):
+        return await server.record_payment(
+            vid, server.PaymentIn(kind="unlock", transaction=tx, payer="0x2222222222222222222222222222222222222222")
+        )
+
+    async def test_the_unlock_records_the_decided_amount_in_the_bound_asset(self):
+        vid = await self.admitted(EURC)
+        await self.age(vid, "3 hours")
+        await self.answer(vid)
+        await self.unlock(vid)
+        row = await self.row(str(vid))
+        self.assertTrue(row["result_unlocked"])
+        self.assertEqual(row["unlock_charged_atomic"], 1_450_000)
+        self.assertEqual(row["unlock_charged_usdc"], Decimal("0.00"))
+
+    async def test_a_usdc_unlock_keeps_the_usdc_column_truthful(self):
+        vid = await self.admitted(USDC)
+        await self.answer(vid)
+        await self.unlock(vid)
+        row = await self.row(str(vid))
+        self.assertEqual(row["unlock_charged_atomic"], 3_400_000)
+        self.assertEqual(row["unlock_charged_usdc"], Decimal("3.40"))

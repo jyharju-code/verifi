@@ -104,6 +104,26 @@ export const INFO_SCHEMA = {
   },
 };
 
+/**
+ * JSON Schema for `service-windows.info` on the unlock 402. The spec requires
+ * it to repeat the applied window, admitted_at, ready_at and terms_id, so the
+ * client can check the arithmetic against the terms it paid for at admission.
+ */
+export const UNLOCK_INFO_SCHEMA = {
+  type: 'object',
+  required: ['version'],
+  properties: {
+    version: { const: 1 },
+    terms_id: { type: 'string' },
+    applied: { enum: ['sla', 'grace'] },
+    admitted_at: { type: 'string', format: 'date-time' },
+    ready_at: { type: 'string', format: 'date-time' },
+    network: { type: 'string' },
+    asset: { type: 'string' },
+    unlock_amount: { type: 'string', pattern: '^[0-9]+$' },
+  },
+};
+
 function decodeAccepted(header) {
   if (!header) return null;
   try {
@@ -191,27 +211,79 @@ export function assetAmount(quote, symbol, network, gate) {
 export function admissionPrice(symbol, network) {
   return async (ctx) => {
     const quote = await admissionQuote(ctx);
-    advertised.set(ctx.adapter, quote.terms);
+    advertised.set(ctx.adapter, { info: quote.terms, schema: INFO_SCHEMA });
     return assetAmount(quote, symbol, network, 'admission');
   };
 }
 
-/** The route declaration. The registered extension fills in the real info. */
-export function serviceWindowsDeclaration() {
-  return { [SERVICE_WINDOWS]: { info: { version: 1 }, schema: INFO_SCHEMA } };
+const UUID_RE = /^[0-9a-f-]{36}$/i;
+
+async function fetchUnlockVerify(ctx) {
+  const id = String(ctx.adapter.getQueryParam('id') ?? '');
+  if (!UUID_RE.test(id)) throw new PricingUnavailableError('unlock price asked without a verify id');
+  let result;
+  try {
+    result = await coreFetch(`/internal/verifies/${id}`);
+  } catch (err) {
+    throw new PricingUnavailableError(`core did not answer for verify ${id}: ${err.message}`);
+  }
+  if (result.status !== 200) throw new PricingUnavailableError(`core verify lookup returned ${result.status}`);
+  return result.body;
 }
 
 /**
- * Fills `extensions["service-windows"]` from the quote the requirements of
- * this same response were built from. The info is a pure function of the
- * stored quote, so a client that echoes it back passes echo validation.
+ * DynamicPrice for gates 2 and 3: exactly one option, in the asset the
+ * admission was paid in, at the amount stored when the human answered. The
+ * pre-check before this route has already refused anything that is not a
+ * ready, locked result. A v2 chain keeps its fixed legacy price.
+ */
+export function unlockPrice(legacyPrice, network) {
+  return async (ctx) => {
+    const v = await fetchUnlockVerify(ctx);
+    if (v.contract_version !== 3) return legacyPrice;
+    const t = v.bound_terms;
+    if (!t || !v.unlock_amount_atomic || !v.applied_window) {
+      throw new PricingUnavailableError(`verify ${v.id} is v3 but has no decided unlock price`);
+    }
+    if (v.bound_network !== network) {
+      throw new PricingUnavailableError(`verify ${v.id} is bound to ${v.bound_network}, not ${network}`);
+    }
+    advertised.set(ctx.adapter, {
+      info: {
+        version: 1,
+        terms_id: v.terms_id,
+        applied: v.applied_window,
+        admitted_at: v.admitted_at,
+        ready_at: v.ready_at,
+        network: v.bound_network,
+        asset: v.bound_asset,
+        unlock_amount: v.unlock_amount_atomic,
+      },
+      schema: UNLOCK_INFO_SCHEMA,
+    });
+    return {
+      asset: v.bound_asset,
+      amount: v.unlock_amount_atomic,
+      extra: { name: t.asset_eip712.name, version: t.asset_eip712.version, terms_id: v.terms_id },
+    };
+  };
+}
+
+/** The route declaration. The registered extension fills in the real info. */
+export function serviceWindowsDeclaration(schema = INFO_SCHEMA) {
+  return { [SERVICE_WINDOWS]: { info: { version: 1 }, schema } };
+}
+
+/**
+ * Fills `extensions["service-windows"]` from the same stored data the
+ * requirements of this response were priced from: the quote at gate 1, the
+ * decided window at gates 2 and 3. The info is a pure function of stored
+ * rows, so a client that echoes it back passes echo validation.
  */
 export const serviceWindowsExtension = {
   key: SERVICE_WINDOWS,
   enrichPaymentRequiredResponse: async (_declaration, context) => {
     const adapter = context.transportContext?.request?.adapter;
-    const info = adapter ? advertised.get(adapter) : undefined;
-    if (!info) return undefined;
-    return { info, schema: INFO_SCHEMA };
+    return (adapter && advertised.get(adapter)) || undefined;
   },
 };

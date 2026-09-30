@@ -35,6 +35,8 @@ import {
   PricingUnavailableError,
   serviceWindowsDeclaration,
   serviceWindowsExtension,
+  UNLOCK_INFO_SCHEMA,
+  unlockPrice,
 } from './routes/terms.js';
 
 const UUID_RE = /^[0-9a-f-]{36}$/i;
@@ -239,11 +241,15 @@ export function createApp({ env = process.env, facilitatorClient } = {}) {
           'POST /verify-unlock': {
             accepts: {
               scheme: 'exact',
-              price: X402_UNLOCK_PRICE,
+              price: unlockPrice(X402_UNLOCK_PRICE, X402_NETWORK),
               network: X402_NETWORK,
               payTo: X402_PAY_TO,
             },
-            description: 'Gate 2 of the same Verifi chain. Unlock its ready human result.',
+            description:
+              'Gates 2 and 3 of the same Verifi chain. Unlock its ready human result at the SLA ' +
+              'or grace price decided when the human answered, in the asset the admission was paid in.',
+            mimeType: 'application/json',
+            extensions: serviceWindowsDeclaration(UNLOCK_INFO_SCHEMA),
           },
         },
         resourceServer,
@@ -262,8 +268,8 @@ export function createApp({ env = process.env, facilitatorClient } = {}) {
     );
 
     console.log(
-      `x402 three-gate flow active: entry quoted in ${assetSymbols(env).join(', ')}, ` +
-      `unlock ${X402_UNLOCK_PRICE}, ${X402_NETWORK} via ${FACILITATOR_URL}`,
+      `x402 three-gate flow active: quoted in ${assetSymbols(env).join(', ')}, ` +
+      `legacy v2 unlock ${X402_UNLOCK_PRICE}, ${X402_NETWORK} via ${FACILITATOR_URL}`,
     );
   } else {
     // Without a payment gate there is nothing left to fall through to, so this
