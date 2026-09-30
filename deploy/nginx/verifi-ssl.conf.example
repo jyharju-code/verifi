@@ -55,6 +55,11 @@ server {
         proxy_pass http://$verify_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
+        # The x402 PAYMENT-REQUIRED header carries the full service-windows
+        # terms and schemas, about 6.5 KB base64. nginx reads response headers
+        # into proxy_buffer_size (4 KB by default) and answers 502 when they
+        # do not fit, so give the header room.
+        proxy_buffer_size 32k;
         proxy_read_timeout 180s;
     }
 
