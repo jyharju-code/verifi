@@ -27,3 +27,8 @@ class PaymentHeaderBufferTests(unittest.TestCase):
                 match = re.search(r"proxy_buffer_size\s+(\d+)k;", block)
                 self.assertIsNotNone(match, "proxy_buffer_size missing in location /verify")
                 self.assertGreaterEqual(int(match.group(1)), 16)
+                # nginx -t rule: busy buffers < all proxy_buffers minus one.
+                count, size = map(int, re.search(r"proxy_buffers\s+(\d+)\s+(\d+)k;", block).groups())
+                busy = int(re.search(r"proxy_busy_buffers_size\s+(\d+)k;", block).group(1))
+                self.assertLess(busy, (count - 1) * size)
+                self.assertGreaterEqual(busy, int(match.group(1)))

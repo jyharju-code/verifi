@@ -58,8 +58,12 @@ server {
         # The x402 PAYMENT-REQUIRED header carries the full service-windows
         # terms and schemas, about 6.5 KB base64. nginx reads response headers
         # into proxy_buffer_size (4 KB by default) and answers 502 when they
-        # do not fit, so give the header room.
+        # do not fit, so give the header room. The busy size nginx derives
+        # from it must stay below proxy_buffers minus one buffer, so both
+        # are set explicitly.
         proxy_buffer_size 32k;
+        proxy_buffers 8 32k;
+        proxy_busy_buffers_size 64k;
         proxy_read_timeout 180s;
     }
 
