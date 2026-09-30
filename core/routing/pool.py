@@ -55,7 +55,8 @@ async def unassigned_pending(conn: asyncpg.Connection, limit: int = 10) -> list[
     """Pending verifies with no associate, oldest first. Reassigned when someone types /vapaa."""
     return await conn.fetch(
         """
-        SELECT id, verify_no, instance, intent, claim, agent_id, tier, created_at
+        SELECT id, verify_no, instance, intent, claim, agent_id, tier, created_at,
+               sla_deadline, grace_deadline
         FROM verifies
         WHERE status = 'pending' AND associate_id IS NULL
         ORDER BY created_at ASC

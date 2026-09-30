@@ -12,7 +12,7 @@ from telegram.ext import ContextTypes
 
 from core import pricing, windows
 from core.audit import audit
-from core.bot.handlers.associate import get_associate, money
+from core.bot.handlers.associate import get_associate, per_asset
 from core.db.database import get_pool
 from core.payments import settlement
 
@@ -26,7 +26,7 @@ async def _resolve(conn, verify, status: str, response: str):
     or its last window has closed.
     """
     row = await windows.record_answer(conn, verify["id"], status, response)
-    credited = await settlement.credit_for_verify(conn, verify["id"])
+    earned = await settlement.credit_for_verify(conn, verify["id"])
     v3 = row["contract_version"] == 3
     await audit(
         "bot",
@@ -38,7 +38,8 @@ async def _resolve(conn, verify, status: str, response: str):
             "status": status,
             "agent_status": "ready",
             "response_time_ms": row["response_time_ms"],
-            "credited_usd": str(credited),
+            "earned_asset": earned.asset if earned else None,
+            "earned_amount_atomic": str(earned.amount_atomic) if earned else None,
             "associate_id": verify["associate_id"],
             "contract_version": row["contract_version"],
             "unlock_list_price_usdc": None if v3 else "2.90",
@@ -58,6 +59,21 @@ async def _resolve(conn, verify, status: str, response: str):
                 "applied_window": row["applied_window"],
                 "asset": row["bound_asset"],
                 "unlock_amount_atomic": pricing.atomic_str(row["unlock_amount_atomic"]),
+            },
+        )
+    if earned is not None:
+        await audit(
+            "bot",
+            "earnings_recorded",
+            {
+                "verify_no": verify["verify_no"],
+                "verify_id": str(verify["id"]),
+                "associate_id": verify["associate_id"],
+                "asset": earned.asset,
+                "amount_atomic": str(earned.amount_atomic),
+                "decimals": earned.decimals,
+                "applied_window": earned.applied_window,
+                "rule": earned.rule,
             },
         )
     return row
@@ -83,7 +99,7 @@ async def _confirmation(conn, verify, status_word: str, row, associate_id: int) 
     return (
         f"✅ Verify #V-{verify['verify_no']} {status_word}. {ms / 1000:.1f} s. Thanks!\n"
         f"{_window_line(row)}"
-        f"This week: {money(week)}"
+        f"This week: {per_asset(week)}"
     )
 
 

@@ -8,7 +8,9 @@ from telegram.ext import ContextTypes
 
 from core import config
 from core.bot import payments as bot_payments
+from core.bot.handlers.associate import per_asset
 from core.db.database import get_pool
+from core.payments import settlement
 from core.routing.scoring import associate_scores
 
 log = logging.getLogger(__name__)
@@ -48,13 +50,15 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
         SELECT count(*) FILTER (WHERE status = 'active') AS active,
                count(*) FILTER (WHERE status = 'active' AND available) AS available,
-               count(*) FILTER (WHERE status = 'pending') AS waiting_approval,
-               COALESCE(sum(earnings - paid_total), 0) AS owed
+               count(*) FILTER (WHERE status = 'pending') AS waiting_approval
         FROM associates
         """
     )
     async with db.acquire() as conn:
         scores = await associate_scores(conn)
+        owed: dict = {}
+        for b in await settlement.balances(conn):
+            owed[b.asset] = owed.get(b.asset, Decimal(0)) + max(b.pending, Decimal(0))
     lines = [
         "📊 Verifi statistics\n",
         f"Verifies total: {totals['total']} (this week {totals['this_week']})",
@@ -65,7 +69,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "",
         f"Associates: {assoc['active']} active, {assoc['available']} available, "
         f"{assoc['waiting_approval']} waiting approval",
-        f"Owed: ${float(assoc['owed']):.2f}",
+        f"Owed: {per_asset(owed)}",
     ]
     if scores:
         lines.append("\nScores (accuracy + speed):")
@@ -187,6 +191,7 @@ async def cmd_maksa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 @admin_only
 async def cmd_maksettu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) < 2:
-        await update.message.reply_text("Usage: /paid @username $42")
+        await update.message.reply_text("Usage: /paid @username 42 [USDC|EURC]")
         return
-    await update.message.reply_text(await bot_payments.mark_paid(context.args[0], context.args[1]))
+    asset = context.args[2] if len(context.args) > 2 else None
+    await update.message.reply_text(await bot_payments.mark_paid(context.args[0], context.args[1], asset))

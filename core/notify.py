@@ -5,6 +5,7 @@ importing the bot application. The bot process itself uses PTB, but the
 card format lives here so both sides send identical messages.
 """
 import logging
+from datetime import timezone
 
 import httpx
 
@@ -15,18 +16,34 @@ log = logging.getLogger(__name__)
 _API = "https://api.telegram.org/bot{token}/{method}"
 
 
+def _utc(moment) -> str:
+    return moment.astimezone(timezone.utc).strftime("%H:%M UTC %d.%m.")
+
+
 def format_verify_card(verify) -> str:
-    """The card an associate sees. Layout follows CLAUDE.md."""
+    """The card an associate sees. Layout follows CLAUDE.md.
+
+    A contract v3 card states both deadlines once, in UTC, when it is sent.
+    There are no reminders, no nudges and no penalties: the windows only
+    decide the requester's price, and the answer is welcome in either.
+    """
     agent = verify["agent_id"] or "unknown"
     if len(agent) > 12:
         agent = f"{agent[:6]}...{agent[-4:]}"
-    return (
+    card = (
         f"🧪 NEW VERIFY #V-{verify['verify_no']}\n"
         f"Instance: {verify['instance']}\n"
         f"Intent: {verify['intent']}\n"
         f"Claim: {verify['claim']}\n"
         f"Requester: agent {agent}"
     )
+    sla = verify.get("sla_deadline")
+    if sla is not None:
+        card += f"\nSLA window until {_utc(sla)}"
+        grace = verify.get("grace_deadline")
+        if grace is not None:
+            card += f"\nGrace window until {_utc(grace)}"
+    return card
 
 
 def verify_keyboard(verify_id) -> dict:
