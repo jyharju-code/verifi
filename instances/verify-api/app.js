@@ -32,6 +32,7 @@ import {
 import {
   admissionPrice,
   assetSymbols,
+  currentTermsHandler,
   PricingUnavailableError,
   serviceWindowsDeclaration,
   serviceWindowsExtension,
@@ -84,6 +85,7 @@ export function createApp({ env = process.env, facilitatorClient } = {}) {
   app.use(express.json({ limit: '32kb' }));
 
   app.get('/health', (_req, res) => res.json({ ok: true }));
+  app.get('/terms', currentTermsHandler);
 
   // Audit every admission and unlock request, including the 402 challenges that
   // let an agent test the payment path. Registered first on each route so the

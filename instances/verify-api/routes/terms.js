@@ -188,6 +188,22 @@ export function admissionQuote(ctx) {
   return pending;
 }
 
+/**
+ * GET /terms: the current quote's public terms, for the MCP server's
+ * verifi_info. Reachable on the docker network only: nginx proxies /verify*
+ * to this service, not /terms.
+ */
+export async function currentTermsHandler(_req, res) {
+  try {
+    const quote = await fetchQuote(null);
+    return res.json({ contract_version: 3, terms: quote.terms });
+  } catch (err) {
+    console.error('terms unavailable:', err.message);
+    res.set('Retry-After', '60');
+    return res.status(503).json({ error: 'pricing is temporarily unavailable' });
+  }
+}
+
 /** One quote price as an x402 AssetAmount, with the EIP-712 domain and terms_id. */
 export function assetAmount(quote, symbol, network, gate) {
   const meta = Object.values(quote.internal?.assets ?? {}).find((m) => m.symbol === symbol);

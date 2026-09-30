@@ -84,7 +84,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Welcome to Verifi! 👋\n\n"
         "Your registration has been received and is waiting for approval.\n\n"
         "Meanwhile you can get ready:\n"
-        "1. Set your USDC address: /address 0x...\n"
+        "1. Set your payout address on Base: /address 0x...\n"
         "   (No wallet yet? Install Rabby Wallet. It takes two minutes.)\n"
         "2. Or choose bank transfer: /payout bank\n\n"
         "Once approved, mark yourself available with /available."
@@ -201,8 +201,8 @@ async def cmd_address(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         context.args[0],
     )
     await update.message.reply_text(
-        f"✅ USDC address saved: {context.args[0][:6]}...{context.args[0][-4:]}\n"
-        f"Payout method: USDC on Base."
+        f"✅ Payout address saved: {context.args[0][:6]}...{context.args[0][-4:]}\n"
+        f"Payout method: on Base. Earnings are paid in the asset they were earned in, USDC or EURC."
     )
 
 
@@ -216,9 +216,9 @@ async def cmd_payout_method(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text("Choose a payout method: /payout bank or /payout crypto")
         return
     if method == "crypto" and not assoc["wallet_address"]:
-        await update.message.reply_text("Set your USDC address first: /address 0x...")
+        await update.message.reply_text("Set your payout address first: /address 0x...")
         return
     db = await get_pool()
     await db.execute("UPDATE associates SET payout_method = $2 WHERE id = $1", assoc["id"], method)
-    name = "bank transfer" if method == "bank" else "USDC on Base"
+    name = "bank transfer" if method == "bank" else "USDC or EURC on Base"
     await update.message.reply_text(f"✅ Payout method changed: {name}")

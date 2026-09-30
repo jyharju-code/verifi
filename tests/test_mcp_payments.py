@@ -60,11 +60,12 @@ def context_with_payment(payment=None, headers=None):
 
 class McpPaymentTests(unittest.IsolatedAsyncioTestCase):
     def test_runtime_version_matches_the_public_contract(self):
-        self.assertEqual(MCP_CONTRACT_VERSION, "2.0.0")
+        self.assertEqual(MCP_CONTRACT_VERSION, "3.0.0")
         self.assertEqual(mcp._mcp_server.version, MCP_CONTRACT_VERSION)
 
-    def test_info_is_actionable_for_an_unconfigured_agent(self):
-        info = verifi_info()
+    async def test_info_is_actionable_for_an_unconfigured_agent(self):
+        with patch("core.mcp.server._current_terms", return_value=None):
+            info = await verifi_info()
         self.assertEqual(info["mcp_endpoint"], "https://verifi.cloud/mcp")
         self.assertFalse(info["authentication"]["api_key_required"])
         self.assertFalse(info["authentication"]["signup_required"])
@@ -72,6 +73,13 @@ class McpPaymentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(info["callback"]["parameter"], "callback_url")
         self.assertIn("verify.ready", info["callback"]["events"])
         self.assertIn("quickstart-for-buyers", info["x402_http_guide"])
+
+    async def test_info_carries_the_current_terms(self):
+        terms = {"version": 1, "terms_id": "st_x", "prices": []}
+        with patch("core.mcp.server._current_terms", return_value=terms):
+            info = await verifi_info()
+        self.assertEqual(info["pricing"]["terms"], terms)
+        self.assertEqual(info["contract_version"], 3)
 
     async def test_entry_returns_standard_x402_requirement_inside_mcp(self):
         calls = []

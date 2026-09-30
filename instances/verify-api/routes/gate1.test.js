@@ -115,3 +115,12 @@ test('X402_ASSETS decides the order of the offer', () => withStack(async ({ base
   const required = await challenge(base);
   assert.deepEqual(required.accepts.map((a) => a.asset), [EURC, USDC]);
 }, { X402_ASSETS: 'EURC,USDC' }));
+
+test('GET /terms returns the current public terms without internals', () => withStack(async ({ core, base }) => {
+  const res = await fetch(`${base}/terms`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.deepEqual(body, { contract_version: 3, terms: quote('st_one').terms });
+  core.termsStatus = 503;
+  assert.equal((await fetch(`${base}/terms`)).status, 503);
+}));
