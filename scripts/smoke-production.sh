@@ -34,9 +34,19 @@ require_text homepage "verifi"
 require_text homepage "x402"
 
 request docs 200 "$base_url/docs/"
-require_text docs 'data-contract-version="2"'
-require_text docs "0.10 USDC"
-require_text docs "2.90 USDC"
+# The site may still serve contract 2 while contract 3 rolls out, so accept
+# either and check the prices of the one that is live.
+if grep -Fq 'data-contract-version="3"' "$smoke_dir/docs.body"; then
+    require_text docs "0.10 EUR"
+    require_text docs "2.90 EUR"
+    require_text docs "1.45 EUR"
+    request well_known_x402 200 "$base_url/.well-known/x402"
+    require_text well_known_x402 "https://verifi.cloud/verify"
+else
+    require_text docs 'data-contract-version="2"'
+    require_text docs "0.10 USDC"
+    require_text docs "2.90 USDC"
+fi
 
 request health 200 "$base_url/verify-api/health"
 require_text health '"ok":true'

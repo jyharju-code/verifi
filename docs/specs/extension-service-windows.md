@@ -362,7 +362,8 @@ metadata. **Open:** field names to align with the Bazaar maintainers.
   The unlock resource URL MUST include the `work_id`, so an unlock authorization
   cannot be replayed against another work item.
 - **Authorization scope:** the unlock payer SHOULD be the admission payer. A
-  server MAY enforce this. Verifi binds both to the requester wallet.
+  server MAY enforce this. Verifi records both payers against the work item
+  and does not yet enforce that they match.
 - **Clock and state manipulation:** the seller controls `ready_at`. A dishonest
   seller could hold a finished result to move it into a later window, but the
   only possible effect is a *lower* price, so the incentive runs against abuse.

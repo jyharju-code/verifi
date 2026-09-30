@@ -309,7 +309,7 @@ euro pricing, EURC"), and the pricing sentence in `CLAUDE.md`.
 
 ## 3. Database migration
 
-One idempotent file, `core/db/migrations/2026-09-30-contract-v3-three-gate.sql`,
+One idempotent file, `core/db/migrations/2026-10-01-contract-v3-three-gate.sql`,
 mirrored in the base schema files and in `deploy/initdb/00-schema.sh`.
 
 New tables:
@@ -403,7 +403,7 @@ is rewritten. `audit_log` stays append-only, with new events `terms_quoted`,
 `core/payments/payout.py`, `core/notify.py`, `core/webhooks.py`,
 `core/wallets.py`, `core/mcp/server.py`.
 
-**Database:** `core/db/migrations/2026-09-30-contract-v3-three-gate.sql` (new),
+**Database:** `core/db/migrations/2026-10-01-contract-v3-three-gate.sql` (new),
 `core/db/verifies.sql`, `core/db/associates.sql`, `core/db/pricing.sql` (new),
 `deploy/initdb/00-schema.sh`.
 

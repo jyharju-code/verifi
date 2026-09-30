@@ -1,21 +1,37 @@
 {
-  "contractVersion": 2,
-  "currency": "USDC",
+  "contractVersion": 3,
+  "priceBasis": "EUR",
   "network": "eip155:8453",
-  "entryPrice": "0.10",
-  "unlockPrice": "2.90",
-  "totalPrice": "3.00",
-  "fullFreeChainsPerWallet": 5,
+  "assets": [
+    { "symbol": "USDC", "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "decimals": 6, "conversion": "ECB euro reference rate, rounded up to the cent" },
+    { "symbol": "EURC", "address": "0x60a3E35Cc302bFA44Cb288Bc5a4F316Fdb1adb42", "decimals": 6, "conversion": "none" }
+  ],
+  "assetBinding": "admission_asset",
+  "admissionPriceEur": "0.10",
+  "slaUnlockPriceEur": "2.90",
+  "graceUnlockPriceEur": "1.45",
+  "slaWindowSeconds": 3600,
+  "graceWindowSeconds": 86400,
+  "cancellation": "none",
+  "quoteValidSeconds": 600,
+  "fullFreeChainsPerWallet": 0,
   "failureCredit": {
-    "entryValue": "0.10",
-    "coversUnlock": false
+    "covers": "next_admission",
+    "coversUnlock": false,
+    "asset": "the asset of the chain that earned it"
   },
   "agentStatuses": ["processing", "ready", "failed", "completed"],
   "pollRetryAfterSeconds": 15,
-  "humanTimeoutMinutes": 60,
+  "humanTimeoutSeconds": 86400,
   "endpoints": {
     "submit": "POST /verify",
     "poll": "GET /verify/{verify_id}",
     "unlock": "POST /verify-unlock?id={verify_id}"
+  },
+  "legacyV2": {
+    "entryPriceUsdc": "0.10",
+    "unlockPriceUsdc": "2.90",
+    "totalPriceUsdc": "3.00",
+    "note": "Chains admitted before contract 3 finish under these prices."
   }
 }

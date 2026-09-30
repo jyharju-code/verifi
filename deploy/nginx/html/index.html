@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Verifi: Human judgment for AI agents</title>
-  <meta name="description" content="Verifi lets AI agents ask a real person for a decision, correction, or better answer. Every review is 3 USDC. Reading the price and testing the connection cost nothing.">
+  <meta name="description" content="Verifi lets AI agents ask a real person for a decision, correction, or better answer. 0.10 EUR to ask, then 2.90 EUR for an answer within 60 minutes or 1.45 EUR within 24 hours. Reading the price costs nothing.">
   <meta name="theme-color" content="#080908">
   <link rel="canonical" href="https://verifi.cloud/">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23d9ff57'/%3E%3Ccircle cx='32' cy='32' r='10' fill='%23080908'/%3E%3C/svg%3E">
@@ -355,7 +355,7 @@
     }
   </style>
 </head>
-<body data-contract-version="2">
+<body data-contract-version="3">
 <a class="skip-link" href="#main">Skip to content</a>
 
 <header>
@@ -385,7 +385,7 @@
       <div>
         <div class="eyebrow">Human judgment for AI agents</div>
         <h1>Give your AI agent access to <span>real human judgment.</span></h1>
-        <p class="hero-lead">Send a question, claim, or draft to a human responder. Get back a clear verdict or a stronger answer your agent can use. Every review is 3 USDC. Reading the price and testing the connection cost nothing.</p>
+        <p class="hero-lead">Send a question, claim, or draft to a human responder. Get back a clear verdict or a stronger answer your agent can use. A review costs 0.10 EUR to ask, then 2.90 EUR if a human answers within 60 minutes or 1.45 EUR within 24 hours. Reading the price and testing the connection cost nothing.</p>
         <div class="hero-actions">
           <a class="btn primary" href="/docs/get-started/">Get started</a>
           <a class="btn" href="#protocol">See how it works</a>
@@ -393,7 +393,7 @@
         <div class="hero-facts" aria-label="Protocol summary">
           <span class="pill">Free price check</span>
           <span class="pill">No signup or API keys</span>
-          <span class="pill">USDC on Base</span>
+          <span class="pill">EURC or USDC on Base</span>
           <span class="pill">Clear human verdict</span>
           <a class="pill" href="/docs/#mcp">MCP: verifi.cloud/mcp</a>
         </div>
@@ -403,11 +403,11 @@
         <div class="window-bar">
           <div class="window-dots" aria-hidden="true"><i></i><i></i><i></i></div>
           <span class="window-title">human-review.json</span>
-          <span class="pill lime">Contract v2</span>
+          <span class="pill lime">Contract v3</span>
         </div>
         <div class="flow-body">
           <div class="flow-step active">
-            <div class="flow-head"><span class="flow-label">01 Send</span><span class="flow-price">0.10 USDC</span></div>
+            <div class="flow-head"><span class="flow-label">01 Send</span><span class="flow-price">0.10 EUR</span></div>
             <p class="code-line"><span class="code-dim">POST</span> /verify
 <span class="code-key">202</span> { "verify_id": "a1b2...", "status": "processing" }</p>
           </div>
@@ -417,7 +417,7 @@
 <span class="code-key">200</span> { "event": "verify.ready", "next_action": "unlock" }</p>
           </div>
           <div class="flow-step active">
-            <div class="flow-head"><span class="flow-label">03 Get the answer</span><span class="flow-price">2.90 USDC</span></div>
+            <div class="flow-head"><span class="flow-label">03 Get the answer</span><span class="flow-price">2.90 or 1.45 EUR</span></div>
             <p class="code-line"><span class="code-dim">POST</span> /verify-unlock?id=a1b2...
 <span class="code-key">200</span> { "status": "completed", "verdict": "refined", "explanation": "..." }</p>
           </div>
@@ -442,8 +442,8 @@
         <div class="protocol-rail">
           <div class="rail-step highlight">
             <span class="rail-index">01</span>
-            <div><strong>Send the request</strong><small>The 0.10 USDC entry fee confirms the request and places it in the human queue.</small></div>
-            <span class="rail-cost">0.10 USDC</span>
+            <div><strong>Send the request</strong><small>The 0.10 EUR admission confirms the request and places it in the human queue. Every later price is known before you pay it.</small></div>
+            <span class="rail-cost">0.10 EUR</span>
           </div>
           <div class="rail-step">
             <span class="rail-index">02</span>
@@ -457,20 +457,20 @@
           </div>
           <div class="rail-step highlight">
             <span class="rail-index">04</span>
-            <div><strong>Unlock and use the answer</strong><small>Pay 2.90 USDC to receive the verdict and explanation.</small></div>
-            <span class="rail-cost">2.90 USDC</span>
+            <div><strong>Unlock and use the answer</strong><small>Pay 2.90 EUR if the human answered within 60 minutes, or 1.45 EUR if the answer came later, within 24 hours. The price is fixed by when the human answered.</small></div>
+            <span class="rail-cost">2.90 / 1.45 EUR</span>
           </div>
         </div>
         <div class="card promise">
           <div>
             <div class="eyebrow">Test before you pay</div>
             <h3>Read the price without paying.</h3>
-            <p>The documentation, MCP discovery, and the 402 Payment Required response are free. Your agent can send an unpaid request, receive a 402 with the exact price and x402 requirements, and test the connection before it ever signs a payment.</p>
+            <p>The documentation, MCP discovery, and the 402 Payment Required response are free. Your agent can send an unpaid request, receive a 402 with every price and the x402 requirements, and test the connection before it ever signs a payment.</p>
           </div>
           <ul class="promise-list">
             <li><b>01</b> Discovery and the price check cost nothing.</li>
-            <li><b>02</b> Every review is paid: 0.10 USDC to enter the queue, 2.90 USDC to unlock the answer.</li>
-            <li><b>03</b> If a request whose entry you actually paid fails without an answer, the wallet receives a 0.10 USDC entry credit toward gate 1 of its next request.</li>
+            <li><b>02</b> Every review is paid: 0.10 EUR to enter the queue, then 2.90 EUR or 1.45 EUR to unlock the answer, depending on when the human answered.</li>
+            <li><b>03</b> If no human answers within 24 hours, the request fails and the wallet's next admission is free, in the same asset.</li>
           </ul>
         </div>
       </div>
@@ -495,7 +495,7 @@
           <div class="eyebrow">Built for AI agents</div>
           <h2>Add human judgment with one API.</h2>
         </div>
-        <p>No API key, signup, or account. Just a wallet. Your agent sends the work and unlocks the human answer when it is ready. Payment runs through x402 with USDC on Base.</p>
+        <p>No API key, signup, or account. Just a wallet. Your agent sends the work and unlocks the human answer when it is ready. Payment runs through x402 with EURC or USDC on Base.</p>
       </div>
       <div class="agent-grid">
         <div class="agent-notes">
@@ -508,7 +508,7 @@
             <span class="window-title">quickstart.sh</span>
             <button class="copy-button" type="button" data-copy="quickstart-code">Copy</button>
           </div>
-          <pre id="quickstart-code"><span class="code-dim"># Send a request. An unpaid request returns a 402 with the exact price to sign.</span>
+          <pre id="quickstart-code"><span class="code-dim"># Send a request. An unpaid request returns a 402 with every price and the payment to sign.</span>
 curl -X POST https://verifi.cloud/verify \
   -H "Content-Type: application/json" \
   -d '{
@@ -564,30 +564,36 @@ curl -X POST "https://verifi.cloud/verify-unlock?id={verify_id}"</pre>
       <div class="section-head">
         <div>
           <div class="eyebrow">Pricing</div>
-          <h2>3 USDC per completed review.</h2>
+          <h2>A fast answer costs more. A slow one unlocks for half.</h2>
         </div>
-        <p>The price is split into a 0.10 USDC entry fee and a 2.90 USDC answer fee. You only pay the second fee when an answer is ready to unlock.</p>
+        <p>Every review has three gates, priced in euros: a 0.10 EUR admission, then one unlock. The unlock price is fixed by when the human answered, never by when your agent collects the answer.</p>
       </div>
       <div class="pricing-grid">
         <div class="card price-card">
           <span class="pill">Free to try</span>
-          <div class="price">0 <small>USDC to read the price</small></div>
+          <div class="price">0 <small>EUR to read every price</small></div>
           <h3>Discovery and the price check</h3>
           <ul>
-            <li>The docs, MCP discovery, and the 402 response are free.</li>
-            <li>An unpaid request returns a 402 with the exact price and x402 requirements.</li>
+            <li>The docs, MCP discovery, the status endpoint, and the 402 response are free.</li>
+            <li>An unpaid request returns a 402 with every price of the review and the x402 requirements.</li>
             <li>Test the connection and read the price before you sign a payment.</li>
           </ul>
         </div>
         <div class="card price-card paid-card">
           <span class="pill lime">Pay as you go</span>
-          <div class="price">3.00 <small>USDC per completed review</small></div>
-          <div class="split-price" aria-label="Paid price breakdown">
-            <div class="gate-price"><span>Gate 1, queue entry</span><strong>0.10 USDC</strong></div>
-            <div class="plus" aria-hidden="true">+</div>
-            <div class="gate-price"><span>Gate 2, answer unlock</span><strong>2.90 USDC</strong></div>
+          <div class="price">0.10 <small>EUR admission, gate 1</small></div>
+          <div class="split-price" aria-label="Unlock price by answer time">
+            <div class="gate-price"><span>Gate 2, answered within 60 minutes</span><strong>2.90 EUR</strong></div>
+            <div class="plus" aria-hidden="true">or</div>
+            <div class="gate-price"><span>Gate 3, answered within 24 hours</span><strong>1.45 EUR</strong></div>
           </div>
-          <div class="credit-note">If an admitted request fails before an answer is produced, the same wallet receives a 0.10 USDC entry credit for its next request. The 2.90 USDC answer fee remains payable when that next answer is ready.</div>
+          <ul>
+            <li>Pay in EURC or USDC on Base. EURC pays the euro prices. USDC pays them converted at the ECB euro reference rate, rounded up to the next cent: at 1 EUR = 1.17 USD, 0.12, then 3.40 or 1.70 USDC.</li>
+            <li>The asset of the admission binds the review. The unlock is paid in the same asset.</li>
+            <li>There is no cancellation. Paying the admission commits to unlocking at one of the two prices.</li>
+            <li>Rates: ECB euro foreign exchange reference rates, published for information purposes only. Source: European Central Bank.</li>
+          </ul>
+          <div class="credit-note">If no human answers within 24 hours, the request fails and nothing more is charged. The same wallet's next admission is free, in the same asset. The unlock of that next review is paid as usual.</div>
         </div>
       </div>
     </div>
@@ -605,7 +611,7 @@ curl -X POST "https://verifi.cloud/verify-unlock?id={verify_id}"</pre>
         <div class="ledger-row"><b>REQUEST</b><span>Who asked, what they need, and the original claim</span></div>
         <div class="ledger-row"><b>ENTRY</b><span>How the request entered the queue and what it cost</span></div>
         <div class="ledger-row"><b>REVIEW</b><span>When human work started, finished, or failed</span></div>
-        <div class="ledger-row"><b>ANSWER</b><span>The final verdict, explanation, and unlock payment</span></div>
+        <div class="ledger-row"><b>ANSWER</b><span>The final verdict, explanation, the window that applied, and the unlock payment</span></div>
         <div class="ledger-row"><b>CREDITS</b><span>Which failure credit funded the entry, if any</span></div>
       </div>
     </div>

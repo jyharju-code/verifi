@@ -11,7 +11,7 @@ account.
 
 | Wallet | Whose | What it holds | Where the key lives |
 |---|---|---|---|
-| Agent wallet | The customer's | The customer's USDC | With the customer, never with us |
+| Agent wallet | The customer's | The customer's USDC or EURC | With the customer, never with us |
 | Receiving wallet | The operator's | Revenue | With the operator (for example an exchange account); the service only knows the address |
 | Gas wallet | The service's | A few euros of ETH | On the server and in the operator's encrypted keychain |
 | Test buyer | The service's | A few USDC for testing | Only in the operator's encrypted keychain |
@@ -21,7 +21,8 @@ account.
 An x402 payment works like a cheque, but digital and settled in seconds:
 
 1. When an agent without an entitlement calls the API, the service replies
-   with the gate 1 invoice: 0.10 USDC, payable to this address.
+   with the gate 1 invoice: 0.10 EUR, payable in EURC or in USDC at the
+   converted amount, to this address.
 2. The agent writes the "cheque": a digitally signed payment authorization
    (EIP-3009) carrying the exact amount, the exact recipient, and a validity
    window. The signature covers all of it, so nobody can alter the amount or
@@ -30,16 +31,18 @@ An x402 payment works like a cheque, but digital and settled in seconds:
 4. The service's own "postman", the facilitator, checks the cheque and
    submits it to the blockchain for settlement. Settlement costs a small
    processing fee (gas), which the postman pays from its own till, the gas
-   wallet. That is why the customer needs no ETH at all: USDC alone is
-   enough.
-5. The USDC moves directly from the agent's wallet to the operator's
+   wallet. That is why the customer needs no ETH at all: USDC or EURC
+   alone is enough.
+5. The tokens move directly from the agent's wallet to the operator's
    receiving address. The money never passes through the service and never
    stops in any intermediate account.
 6. Only after the gate 1 settlement is recorded does the request continue to
    a human in Telegram.
-7. When the human result is ready, the service issues a separate gate 2
-   invoice for 2.90 USDC. A new authorization and settlement unlocks the
-   result. The two transactions share one verify id but are not one payment.
+7. When the human result is ready, the service issues a separate unlock
+   invoice in the same token: 2.90 EUR if the human answered within 60
+   minutes of admission, 1.45 EUR if later. A new authorization and
+   settlement unlocks the result. The two transactions share one verify id
+   but are not one payment.
 
 One settlement costs fractions of a cent on Base, so a 15 euro gas till
 covers thousands of payments.
@@ -76,21 +79,25 @@ event. The append-only audit log records every money-related transition.
 4. Agent repeats the request with the authorization attached.
 5. The facilitator verifies it and submits the transfer; gas comes from the
    gas wallet.
-6. 0.10 USDC moves from the agent directly to the receiving address.
+6. The admission, for example 0.10 EURC, moves from the agent directly to
+   the receiving address.
 7. The durable verify id returns and the agent polls while a human works.
 8. Polling reports `ready`, with the answer still locked.
-9. The agent calls the unlock endpoint, signs a new 2.90 USDC authorization,
-   and the facilitator settles the second transaction.
-10. The completed response contains the answer. Total charged is 3.00 USDC.
+9. The agent calls the unlock endpoint, signs a new authorization for the
+   SLA or grace price in the same token, and the facilitator settles the
+   second transaction.
+10. The completed response contains the answer. Total charged is 3.00 EURC
+    for an SLA answer, 1.55 EURC for a grace answer (USDC: the converted
+    amounts).
 
 ## No free chains, only earned failure credits
 
-There is no free human work: every chain pays the 0.10 and 2.90 USDC gates
+There is no free human work: every chain pays its admission and its unlock
 (`verify-api.free_tier_count` is `0`). The only way a gate is covered without a
-fresh payment is an earned credit: if an admitted chain whose entry was
-actually paid fails without a redeemable result, the wallet gets one entry-only
-credit. It replaces the next 0.10 USDC payment but not the later 2.90 USDC
-unlock. Because credits come only from a paid, failed chain, they cannot be
+fresh payment is an earned credit: if an admitted chain whose admission was
+actually paid expires without an answer, the wallet gets one admission-only
+credit in the same token. It replaces the next admission payment but not the
+later unlock. Because credits come only from a paid, failed chain, they cannot be
 farmed for free work.
 
 ## Turning on mainnet settlement
@@ -148,6 +155,25 @@ to point verify-api at a facilitator that fails it.
 Until the gas wallet exists, the honest alternative is to keep the paid gates
 off. Leaving `X402_PAY_TO` unset makes both gates answer a clear 503 instead
 of advertising a price nothing can settle.
+
+## Two tokens: USDC and EURC (contract v3)
+
+Agents pay in USDC or in EURC, both native Circle tokens on Base with
+EIP-3009 `transferWithAuthorization`. The facilitator needs no change for
+EURC: x402-rs has no token allowlist and signs each transfer with the EIP-712
+domain carried in the payment requirement (`EURC`, version `2`). core-api
+checks at startup that both token contracts still report the configured
+name, version and decimals, and alerts the operator if one does not.
+
+Before switching contract v3 on, confirm that the receiving address accepts
+EURC on Base. An exchange deposit address that lists only USDC on Base may
+not credit an EURC transfer. The receiving wallet row on the dashboard shows
+the USDC balance only; check EURC on the block explorer.
+
+Responder earnings are kept per token and paid out per token: an EURC chain
+earns EURC, a USDC chain earns USDC, and nothing is converted. `/payouts`
+prints a ready awal command for USDC and a manual instruction for EURC,
+because awal sends USDC only.
 
 ## Maintenance
 

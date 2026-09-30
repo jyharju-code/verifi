@@ -204,10 +204,12 @@ test('code and rendered docs match the canonical contract', () => {
     new URL('../../../deploy/nginx/html/docs/index.html', import.meta.url),
     'utf8',
   );
+  // Chains admitted before contract 3 still render their legacy prices.
   const view = publicView(base);
-  assert.equal(contract.entryPrice, view.funding.entry_list_price_usdc);
-  assert.equal(contract.unlockPrice, view.funding.unlock_list_price_usdc);
-  assert.equal(contract.totalPrice, view.funding.total_list_price_usdc);
+  assert.equal(contract.legacyV2.entryPriceUsdc, view.funding.entry_list_price_usdc);
+  assert.equal(contract.legacyV2.unlockPriceUsdc, view.funding.unlock_list_price_usdc);
+  assert.equal(contract.legacyV2.totalPriceUsdc, view.funding.total_list_price_usdc);
+  assert.equal(contract.contractVersion, 3);
   assert.match(markdown, new RegExp(`Contract version: ${contract.contractVersion}`));
   assert.match(html, new RegExp(`data-contract-version="${contract.contractVersion}"`));
   assert.match(markdown, /every verification is paid/i);
