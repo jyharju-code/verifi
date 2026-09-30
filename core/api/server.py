@@ -259,8 +259,13 @@ def _row_to_dict(row) -> dict:
 async def _expire_stale_once() -> int:
     """Fail timed-out human work.
 
+    A chain expires when expires_at has passed: 60 minutes for v2 chains, the
+    end of the last window for v3 chains. The comparison is strict, so the
+    boundary instant still belongs to the window, as it does for answers.
+
     An x402-paid entry that times out gets one entry-only credit, because a
-    real 0.10 USDC settlement was made. An entitlement-funded entry (a free
+    real entry settlement was made. The credit records the asset it was paid
+    in, and the next chain it admits binds to that asset (Q3). An entitlement-funded entry (a free
     chain or a prior credit) instead releases its entitlement back to the
     wallet: the free use is not lost, and a credit cannot mint a fresh credit,
     which is what previously let an expiring chain regenerate free admissions
@@ -286,7 +291,8 @@ async def _expire_stale_once() -> int:
                     failure_reason = 'human_timeout',
                     failure_credit_granted = (agent_id IS NOT NULL AND entry_source = 'x402')
                 WHERE status = 'pending' AND expires_at < now()
-                RETURNING id, verify_no, instance, agent_id, associate_id, entry_source
+                RETURNING id, verify_no, instance, agent_id, associate_id, entry_source,
+                          contract_version, bound_asset, bound_terms, entry_amount_atomic
                 """
             )
             for r in rows:
@@ -300,12 +306,17 @@ async def _expire_stale_once() -> int:
                             source_verify_id, details
                         )
                         VALUES ($1, $2, 'failure_credit', true, false, $3,
-                                jsonb_build_object('reason', 'human_timeout'))
+                                jsonb_strip_nulls(jsonb_build_object(
+                                    'reason', 'human_timeout',
+                                    'asset', $4::text,
+                                    'entry_amount_atomic', $5::text)))
                         ON CONFLICT DO NOTHING
                         """,
                         r["instance"],
                         r["agent_id"],
                         r["id"],
+                        r["bound_asset"],
+                        _atomic(r["entry_amount_atomic"]),
                     )
                 else:
                     # initial_free or failure_credit: return the entitlement so
@@ -335,6 +346,7 @@ async def _expire_stale_once() -> int:
     for r in rows:
         log.info("verify #V-%s expired", r["verify_no"])
         credit_granted = bool(r["agent_id"]) and r["entry_source"] == "x402"
+        v3 = r["contract_version"] == 3
         await audit(
             "core-api",
             "verify_failed_credit_granted" if credit_granted else "verify_failed_entitlement_returned",
@@ -343,7 +355,10 @@ async def _expire_stale_once() -> int:
                 "verify_id": str(r["id"]),
                 "wallet_address": r["agent_id"],
                 "entry_source": r["entry_source"],
-                "credit_usdc": "0.10" if credit_granted else "0.00",
+                "contract_version": r["contract_version"],
+                "credit_asset": r["bound_asset"] if v3 else None,
+                "credit_amount_atomic": _atomic(r["entry_amount_atomic"]) if v3 and credit_granted else None,
+                "credit_usdc": None if v3 else ("0.10" if credit_granted else "0.00"),
                 "entitlement_returned": bool(r["agent_id"]) and not credit_granted,
                 "reason": "human_timeout",
             },
