@@ -200,3 +200,15 @@ class EcbParseTests(unittest.TestCase):
         for bad in ("", "<html>maintenance</html>", ECB_SAMPLE.replace("1.1355", "-1")):
             with self.subTest(bad=bad[:20]), self.assertRaises(FxParseError):
                 parse_ecb_daily(bad)
+
+
+class AtomicStringTests(unittest.TestCase):
+    def test_database_numerics_become_plain_digits(self):
+        self.assertEqual(pricing.atomic_str(Decimal("2.90E+6")), "2900000")
+        self.assertEqual(pricing.atomic_str(Decimal("120000")), "120000")
+        self.assertEqual(pricing.atomic_str(0), "0")
+        self.assertIsNone(pricing.atomic_str(None))
+
+    def test_a_fraction_is_refused(self):
+        with self.assertRaises(ValueError):
+            pricing.atomic_str(Decimal("1.5"))

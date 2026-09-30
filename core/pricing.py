@@ -208,6 +208,16 @@ def from_atomic(amount_atomic: int, decimals: int) -> Decimal:
     return Decimal(int(amount_atomic)) / (Decimal(10) ** decimals)
 
 
+def atomic_str(value) -> str | None:
+    """An atomic amount as plain digits. PostgreSQL numerics can come back as
+    Decimal('2.90E+6'), whose str() is not a valid x402 amount."""
+    if value is None:
+        return None
+    if value != int(value):
+        raise ValueError(f"atomic amount {value} is not an integer")
+    return str(int(value))
+
+
 def _money(amount: Decimal) -> str:
     return str(amount.quantize(CENT))
 

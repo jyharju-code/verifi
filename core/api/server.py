@@ -161,7 +161,7 @@ def _iso(value):
 
 
 def _atomic(value):
-    return str(value) if value is not None else None
+    return pricing.atomic_str(value)
 
 
 class RequestAuditIn(BaseModel):
