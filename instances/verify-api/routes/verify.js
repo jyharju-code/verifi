@@ -8,15 +8,13 @@
  */
 import { Router } from 'express';
 import crypto from 'node:crypto';
+import { coreFetch, INSTANCE } from './core.js';
+import { paidSelection } from './terms.js';
+
+export { coreFetch };
 
 export const verifyRouter = Router();
 
-const CORE_API = process.env.CORE_API_URL ?? 'http://127.0.0.1:8700';
-const INSTANCE = process.env.INSTANCE_ID ?? 'verify-api';
-// Shared secret for the core money surface. When set, core rejects any
-// /internal call that does not carry it, so payment settlement cannot be
-// forged even if the core port becomes reachable.
-const CORE_INTERNAL_SECRET = process.env.CORE_INTERNAL_SECRET ?? '';
 const EXPIRE_MS = 60 * 60 * 1000;
 const RETRY_AFTER_S = 15;
 const RESOLVED = new Set(['accepted', 'rejected', 'refined']);
@@ -43,14 +41,6 @@ export function admissionRoute(quota) {
   if (quota.pending_count > 0) return 'active-chain';
   const entitled = quota.entitlement_admission_available ?? quota.has_entry_entitlement;
   return entitled ? 'entitlement' : 'payment-gate';
-}
-
-export async function coreFetch(path, options = {}) {
-  const headers = { 'content-type': 'application/json', ...(options.headers ?? {}) };
-  if (CORE_INTERNAL_SECRET) headers['x-internal-secret'] = CORE_INTERNAL_SECRET;
-  const resp = await fetch(`${CORE_API}${path}`, { ...options, headers });
-  const body = await resp.json().catch(() => ({}));
-  return { status: resp.status, body };
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +179,9 @@ export function publicView(v, { forceUnlocked = false } = {}) {
   const fullFree = v.entry_source === 'initial_free';
   const unlockSource = forceUnlocked ? 'x402' : v.unlock_source;
   const unlockCharged = forceUnlocked ? '2.90' : (v.unlock_charged_usdc ?? '0.00');
+  // A *_usdc field on a chain bound to another asset would be a misleading
+  // number, so it is null there. The asset-neutral fields carry the amount.
+  const usdcOnly = (value) => (v.contract_version === 3 && !isUsdcChain(v) ? null : value);
   const view = {
     verify_id: v.id,
     status,
@@ -202,7 +195,7 @@ export function publicView(v, { forceUnlocked = false } = {}) {
       entry_source: v.entry_source,
       free_use_number: v.free_use_number ?? null,
       entry_list_price_usdc: v.entry_list_price_usdc ?? '0.10',
-      entry_charged_usdc: v.entry_charged_usdc ?? '0.00',
+      entry_charged_usdc: usdcOnly(v.entry_charged_usdc ?? '0.00'),
       unlock_source: unlockSource,
       unlock_list_price_usdc: v.unlock_list_price_usdc ?? '2.90',
       unlock_charged_usdc: unlockCharged,
@@ -216,6 +209,10 @@ export function publicView(v, { forceUnlocked = false } = {}) {
     expires_at: v.expires_at,
     responded_at: v.responded_at,
     unlocked_at: v.unlocked_at,
+    contract_version: v.contract_version ?? 2,
+    sla_deadline: v.sla_deadline ?? null,
+    grace_deadline: v.grace_deadline ?? null,
+    terms: v.bound_terms ?? null,
   };
 
   if (status === 'processing') {
@@ -329,6 +326,9 @@ export async function handleVerify(req, res) {
     }
   }
 
+  // The quote and asset this admission was paid against. Core copies that
+  // quote into the chain, so gates 2 and 3 are priced from it and nothing else.
+  const paid = req.admissionMode === 'x402' ? paidSelection(req) : null;
   const create = await coreFetch('/internal/verifies', {
     method: 'POST',
     body: JSON.stringify({
@@ -339,8 +339,19 @@ export async function handleVerify(req, res) {
       admission_mode: req.admissionMode,
       callback_url: callbackUrl ?? null,
       request_id: req.auditContext?.request_id ?? null,
+      terms_id: paid?.termsId ?? null,
+      paid_asset: paid?.asset ?? null,
     }),
   });
+  if (create.status === 409) {
+    // Only reachable if the quote vanished between the gate and this call.
+    // The 409 cancels settlement, so the signed payment is never submitted.
+    console.error('core refused the paid terms:', create.body?.detail);
+    return res.status(409).json({
+      error: 'the paid terms could not be bound',
+      detail: 'Retry POST /verify for a fresh quote. No payment was taken.',
+    });
+  }
   if (create.status === 402) {
     return res.status(409).json({
       error: 'entry entitlement was consumed by another request',
@@ -353,16 +364,17 @@ export async function handleVerify(req, res) {
       detail: 'Poll the previous verify until it is completed or failed.',
     });
   }
-  // The core refuses a full queue before it inserts the row and before it
-  // consumes an entitlement, so nothing is spent here. On the x402 path this
-  // 503 also cancels settlement, so the entry payment is never submitted and
-  // the caller keeps its 0.10 USDC. No credit or refund is needed.
+  // The core refuses a full queue, a paused instance, and a credit admission
+  // it cannot price before it inserts the row and before it consumes an
+  // entitlement, so nothing is spent here. On the x402 path this 503 also
+  // cancels settlement, so the entry payment is never submitted. No credit or
+  // refund is needed.
   if (create.status === 503) {
-    res.set('Retry-After', '120');
-    return res.status(503).json({
-      error: 'human queue is full',
-      detail: 'Retry in a couple of minutes. No payment was taken.',
-    });
+    const queueFull = /queue is full/i.test(String(create.body?.detail ?? ''));
+    res.set('Retry-After', queueFull ? '120' : '60');
+    return res.status(503).json(queueFull
+      ? { error: 'human queue is full', detail: 'Retry in a couple of minutes. No payment was taken.' }
+      : { error: 'admission is temporarily unavailable', detail: 'Retry shortly. No payment was taken.' });
   }
   if (create.status !== 200) {
     console.error('core create failed:', create.status, create.body);
@@ -387,14 +399,46 @@ export async function handleVerify(req, res) {
   }
 
   res.set('Retry-After', String(RETRY_AFTER_S));
-  const admitted = req.admissionMode === 'x402'
-    ? { ...create.body, entry_charged_usdc: '0.10' }
-    : create.body;
+  // x402 releases this body only after the entry settles, but it was built
+  // before: the row still shows the entry as unpaid and the windows as not
+  // started. Report the charge the settlement is about to record. The
+  // deadlines stay null here and appear on the first poll, because they run
+  // from admitted_at, which is the settlement itself.
+  const admitted = req.admissionMode === 'x402' ? settledEntryView(create.body) : create.body;
   return res.status(202).json({
     ...publicView(admitted),
-    response_timeout_ms: EXPIRE_MS,
+    response_timeout_ms: responseTimeoutMs(create.body),
     message: 'Admission accepted. Poll until status is ready or failed.',
   });
+}
+
+function settledEntryView(v) {
+  if (v.contract_version !== 3) return { ...v, entry_charged_usdc: '0.10' };
+  return {
+    ...v,
+    entry_charged_atomic: v.entry_amount_atomic,
+    entry_charged_usdc: isUsdcChain(v) ? atomicToDecimal(v.entry_amount_atomic, 6) : null,
+  };
+}
+
+/** How long the chain may wait for its human, from its bound windows. */
+export function responseTimeoutMs(v) {
+  const windows = v.bound_terms?.windows;
+  if (!windows) return EXPIRE_MS;
+  return (windows.grace ?? windows.sla).within_seconds * 1000;
+}
+
+export function isUsdcChain(v) {
+  return v.bound_terms?.asset_symbol === 'USDC';
+}
+
+/** Atomic units to a fixed decimal string, without floating point. */
+export function atomicToDecimal(atomic, decimals) {
+  if (atomic === null || atomic === undefined) return null;
+  const digits = BigInt(atomic).toString().padStart(decimals + 1, '0');
+  const whole = digits.slice(0, -decimals);
+  const frac = digits.slice(-decimals).replace(/0+$/, '');
+  return `${whole}.${frac.padEnd(2, '0')}`;
 }
 
 verifyRouter.get('/verify/:id', async (req, res) => {

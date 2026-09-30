@@ -184,7 +184,7 @@ test('outcome maps the money-relevant statuses', () => {
 });
 
 test('unlock ownership proof belongs to the current paid request', () => {
-  const server = readFileSync(new URL('../server.js', import.meta.url), 'utf8');
+  const server = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
   assert.match(
     server,
     /Looking up a paid verify proves nothing[\s\S]*wallet_ownership_proven = false/,

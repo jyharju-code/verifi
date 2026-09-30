@@ -119,13 +119,18 @@ class NoGraceTests(unittest.TestCase):
 
 
 class AvailabilityTests(unittest.TestCase):
-    def test_without_a_rate_only_the_basis_asset_is_offered(self):
-        t, _ = terms(fx=None)
+    def test_a_partial_offer_is_refused_not_served(self):
+        # An EURC-only 402 would trap clients that pay with the first option.
+        with self.assertRaises(PricingUnavailable):
+            terms(fx=None)
+
+    def test_an_eurc_only_deployment_needs_no_rate(self):
+        t, _ = terms({"X402_ASSETS": "EURC"}, fx=None)
         self.assertEqual([p["asset"] for p in t["prices"]], [EURC])
 
-    def test_nothing_priceable_is_an_error_not_an_empty_offer(self):
-        with self.assertRaises(PricingUnavailable):
-            terms({"X402_ASSETS": "USDC"}, fx=None)
+    def test_the_offer_is_exactly_the_configured_assets_in_order(self):
+        t, _ = terms({"X402_ASSETS": "EURC,USDC"})
+        self.assertEqual([p["asset"] for p in t["prices"]], [EURC, USDC])
 
 
 class ConfigValidationTests(unittest.TestCase):

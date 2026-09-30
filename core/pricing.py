@@ -264,7 +264,14 @@ def build_terms(
     for asset in cfg.assets:
         priced = _asset_amounts(cfg, asset, fx)
         if priced is None:
-            continue
+            # A partial offer is refused rather than served. An EURC-only 402
+            # would make every x402 client that picks the first option sign a
+            # payment in an asset it may not hold. In practice this only
+            # happens on a new database before its first rate: an old rate is
+            # always used rather than none.
+            raise PricingUnavailable(
+                f"{asset.symbol} cannot be priced: no {cfg.price_basis}/{asset.currency} rate is recorded"
+            )
         amounts, conversion = priced
         entry = {"network": asset.network, "asset": asset.address}
         entry.update({k: str(v) for k, v in amounts.items()})
@@ -279,9 +286,6 @@ def build_terms(
             "version": asset.eip712_version,
             "currency": asset.currency,
         }
-    if not prices:
-        raise PricingUnavailable("no accepted asset can be priced (is an exchange rate recorded?)")
-
     terms = {
         "version": SPEC_VERSION,
         "terms_id": terms_id,
@@ -297,6 +301,41 @@ def build_terms(
     }
     internal = {"assets": assets_meta, "responder_commission_eur": _money(commission_eur)}
     return terms, internal
+
+
+def bind_terms(terms: dict, internal: dict, asset_address: str) -> dict | None:
+    """The terms a work item keeps for its whole life, for the asset it paid in.
+
+    Per the spec's "Binding the terms": the windows, the asset and its
+    admission, sla and grace amounts, and the cancellation and expiry terms,
+    plus the conversion that produced them. Returns None when the asset is not
+    part of the quote. The result is stored once and never recomputed.
+    """
+    meta = internal.get("assets", {}).get(asset_address.lower())
+    price = next((p for p in terms["prices"] if p["asset"].lower() == asset_address.lower()), None)
+    if meta is None or price is None:
+        return None
+    bound = {
+        "version": terms["version"],
+        "terms_id": terms["terms_id"],
+        "windows": terms["windows"],
+        "price_basis": terms["price_basis"],
+        "network": price["network"],
+        "asset": meta["address"],
+        "asset_symbol": meta["symbol"],
+        "asset_decimals": meta["decimals"],
+        "asset_eip712": {"name": meta["name"], "version": meta["version"]},
+        "admission": price["admission"],
+        "sla": price["sla"],
+        "asset_binding": terms["asset_binding"],
+        "expiry": terms["expiry"],
+        "cancellation": terms["cancellation"],
+    }
+    if "grace" in price:
+        bound["grace"] = price["grace"]
+    if "conversion" in price:
+        bound["conversion"] = price["conversion"]
+    return bound
 
 
 def fingerprint(cfg: PricingConfig, fx: FxRate | None, commission_eur: Decimal) -> str:

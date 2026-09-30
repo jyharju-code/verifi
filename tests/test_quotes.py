@@ -66,13 +66,18 @@ class QuoteTests(DatabaseTestCase):
             await server.terms_by_id("st_does_not_exist")
         self.assertEqual(ctx.exception.status_code, 404)
 
-    async def test_without_any_priceable_asset_the_quote_is_503(self):
+    async def test_without_a_rate_the_quote_is_503_not_partial(self):
         await self.db.execute("DELETE FROM fx_rates")
-        with patch.dict("os.environ", {"X402_ASSETS": "USDC"}):
-            server._PRICING = None
-            with self.assertRaises(HTTPException) as ctx:
-                await server.terms_current()
+        with self.assertRaises(HTTPException) as ctx:
+            await server.terms_current()
         self.assertEqual(ctx.exception.status_code, 503)
+
+    async def test_an_eurc_only_deployment_quotes_without_a_rate(self):
+        await self.db.execute("DELETE FROM fx_rates")
+        with patch.dict("os.environ", {"X402_ASSETS": "EURC"}):
+            server._PRICING = None
+            quote = await server.terms_current()
+        self.assertEqual(len(quote["terms"]["prices"]), 1)
 
     async def test_the_quote_snapshots_the_responder_commission(self):
         await self.db.execute("UPDATE instances SET associate_commission = 0.40 WHERE id = 'verify-api'")
