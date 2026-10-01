@@ -2,8 +2,29 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "cloud.verifi/human-verification",
   "title": "Verifi",
-  "description": "Get a real human to verify, decide, or improve an AI agent's work.",
-  "version": "3.0.0",
+  "description": "Get a real human to verify, decide, or improve an AI agent's work. Pay per review via x402 on Base.",
+  "version": "3.0.1",
+  "websiteUrl": "https://verifi.cloud/docs/",
+  "repository": {
+    "url": "https://github.com/jyharju-code/verifi",
+    "source": "github"
+  },
+  "icons": [
+    {
+      "src": "https://verifi.cloud/icon-512.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "512x512"
+      ]
+    },
+    {
+      "src": "https://verifi.cloud/favicon.svg",
+      "mimeType": "image/svg+xml",
+      "sizes": [
+        "any"
+      ]
+    }
+  ],
   "remotes": [
     {
       "type": "streamable-http",

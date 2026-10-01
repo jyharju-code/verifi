@@ -21,7 +21,7 @@ from mcp.types import CallToolResult, TextContent
 
 VERIFY_API = os.environ.get("VERIFY_API_URL", "http://verify-api:8702")
 MCP_PORT = int(os.environ.get("MCP_PORT", "8704"))
-MCP_CONTRACT_VERSION = "3.0.0"
+MCP_CONTRACT_VERSION = "3.0.1"
 MCP_PAYMENT_META_KEY = "x402/payment"
 MCP_PAYMENT_RESPONSE_META_KEY = "x402/payment-response"
 
