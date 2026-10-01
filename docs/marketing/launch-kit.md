@@ -12,9 +12,8 @@ Facts to keep straight:
 - Price: 0.10 EUR to enter the human queue, then 2.90 EUR if the human answered
   within 60 minutes of admission, or 1.45 EUR within 24 hours. The unlock price
   is fixed by when the human answered, never by when the agent collects it.
-- Paid with x402 on Base. USDC today (converted from euros at the ECB reference
-  rate, shown in every 402). EURC is ready in code and switches on once the
-  receiving address is confirmed.
+- Paid with x402 on Base, in EURC (the euro prices) or USDC (converted at the
+  ECB reference rate, shown in every 402).
 - No signup, no API key, no account. The agent's wallet is its identity.
 - Free: docs, MCP discovery, the status endpoint and the 402 itself, so an agent
   can read every price before it pays.
@@ -184,7 +183,7 @@ Docs: https://verifi.cloud/docs/
 - Endpoint: `POST https://verifi.cloud/verify` (returns 402 with x402
   requirements)
 - OpenAPI: https://verifi.cloud/openapi.json
-- Network and asset: Base mainnet (eip155:8453), USDC; EURC planned
+- Network and asset: Base mainnet (eip155:8453), USDC and EURC
 - Price: 0.10 EUR admission, then 2.90 or 1.45 EUR unlock (shown converted in
   the 402)
 - Payout wallet: the `X402_PAY_TO` receiving address (Juhana confirms)

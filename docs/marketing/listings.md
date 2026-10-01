@@ -83,8 +83,7 @@ real money after the free 402. Options: a short demo video, or a small number
 of free first reviews per wallet with a hard daily cap. That is a product
 decision, not a listing step.
 
-## Do first
+## EURC
 
-Confirm EURC on the Coinbase receiving address, or change the docs to say EURC
-comes later. Directories copy the docs, and they currently promise EURC while
-production offers USDC only.
+Confirmed 2026-10-01: the Coinbase receiving address is the same for EURC on
+Base, and production offers USDC and EURC.
