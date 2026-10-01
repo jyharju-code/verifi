@@ -8,7 +8,8 @@
     "version": "3.0.0",
     "contact": {
       "name": "Verifi",
-      "url": "https://verifi.cloud/contact"
+      "url": "https://verifi.cloud/contact",
+      "email": "juhana@potamoi.eu"
     },
     "license": {
       "name": "Proprietary",
@@ -861,7 +862,8 @@
               }
             }
           }
-        }
+        },
+        "security": []
       }
     },
     "/verify/{verify_id}/unlock": {
