@@ -21,7 +21,7 @@ from mcp.types import CallToolResult, TextContent
 
 VERIFY_API = os.environ.get("VERIFY_API_URL", "http://verify-api:8702")
 MCP_PORT = int(os.environ.get("MCP_PORT", "8704"))
-MCP_CONTRACT_VERSION = "3.0.0"
+MCP_CONTRACT_VERSION = "3.0.1"
 MCP_PAYMENT_META_KEY = "x402/payment"
 MCP_PAYMENT_RESPONSE_META_KEY = "x402/payment-response"
 
@@ -164,7 +164,14 @@ async def verify_claim(
     callback_url: str | None = None,
     payment_signature: str | None = None,
 ) -> CallToolResult:
-    """Ask a real human to verify a claim.
+    """Ask a real human to verify, decide on, or improve something before your agent acts.
+
+    Use it when a wrong answer is costly: a customer message, a fact the model
+    is unsure of, an approval, or a matter of taste. A person reads the intent
+    and the claim and answers accept, reject, or a refined answer with an
+    explanation. This call is gate 1: it costs 0.10 EUR (paid on Base
+    via x402) and returns a payment requirement first if unpaid; reading that
+    requirement is free and shows every later price.
 
     intent: what your agent is trying to do (max 2000 chars).
     claim: the claim a human should verify (max 4000 chars).
@@ -195,7 +202,16 @@ async def verify_claim(
 
 @mcp.tool()
 async def get_verify(verify_id: str) -> dict:
-    """Poll until ready or failed. Honor retry_after_seconds while processing."""
+    """Read the current state of a verification. Free, never reveals a locked answer.
+
+    verify_id: the id returned by verify_claim.
+    Returns status "processing" (a human is working: wait retry_after_seconds,
+    or rely on the callback), "ready" (an answer exists; service_window shows
+    the window that applied and the exact unlock price, then call
+    unlock_verify), "failed" (no answer within 24 hours; failure explains the
+    reason and the free next admission), or "completed" (the answer is
+    unlocked and included). Use it as a recovery path when no callback is set.
+    """
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(f"{VERIFY_API}/verify/{verify_id}")
     return resp.json()
@@ -242,7 +258,15 @@ async def _current_terms() -> dict | None:
 
 @mcp.tool()
 async def verifi_info() -> dict:
-    """Service description, the current price terms, and rules."""
+    """Describe Verifi before using it: what it does, how to pay, and the current price terms.
+
+    Free and needs no arguments. Returns the service summary, authentication
+    (none, only a wallet address), the live price terms (0.10 EUR admission,
+    then 2.90 EUR if a human answers within 60 minutes or 1.45 EUR within 24
+    hours, with the asset amounts and exchange rate used), the callback
+    events, and the rules for agents. Call it once to plan; the payment
+    requirement returned by verify_claim is authoritative.
+    """
     terms = await _current_terms()
     return {
         "service": "Verifi: verified human loops for AI agents",

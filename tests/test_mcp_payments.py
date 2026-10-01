@@ -60,7 +60,7 @@ def context_with_payment(payment=None, headers=None):
 
 class McpPaymentTests(unittest.IsolatedAsyncioTestCase):
     def test_runtime_version_matches_the_public_contract(self):
-        self.assertEqual(MCP_CONTRACT_VERSION, "3.0.0")
+        self.assertEqual(MCP_CONTRACT_VERSION, "3.0.1")
         self.assertEqual(mcp._mcp_server.version, MCP_CONTRACT_VERSION)
 
     async def test_info_is_actionable_for_an_unconfigured_agent(self):

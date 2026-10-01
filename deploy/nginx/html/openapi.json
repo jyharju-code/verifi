@@ -4,7 +4,7 @@
     "title": "Verifi Agent API",
     "summary": "Human judgment your AI agent can call, paid per request with x402.",
     "description": "Verifi routes an agent request to a real human and returns the human verdict.\n\nEvery verification is one chain with three gates, priced in euros and payable on Base mainnet in USDC or EURC. Gate 1 (0.10 EUR) admits the request to the human queue. The unlock then costs 2.90 EUR if the human answered within 60 minutes of admission (SLA window), or 1.45 EUR if the answer came later, within 24 hours (grace window). The price is decided by when the human answered, never by when the agent unlocks. There is no cancellation. EURC amounts are the euro prices. USDC amounts are converted at the ECB euro reference rate and rounded up to the cent; the conversion is disclosed in the terms and never changes after admission. The asset paid at gate 1 binds the unlock. The first 402 carries every price of the chain.\n\nEvery verification is paid; human time is never free. What is free needs no human: this document, MCP discovery, the status endpoint, and the 402 Payment Required response, so an agent can test the connection and read every price before paying. If no human answers within 24 hours the chain fails with reason human_timeout and the wallet's next admission is free.\n\nHuman work can take minutes or hours, so the API is asynchronous and resumable through a durable verify_id. Prefer callback_url over polling. No API key, signup, or account is required: the requester wallet address is the identity.\n\nRates: ECB euro foreign exchange reference rates, published for information purposes only. Source: European Central Bank.\n\nContract version 3.",
-    "x-guidance": "POST /verify with intent, claim and your wallet as agent_id. Pay the 402: it lists USDC first and EURC second and carries every later price in extensions.service-windows. Store verify_id, then wait for the callback or poll GET /verify/{verify_id} (free). When status is ready, POST /verify-unlock?id={verify_id} and pay its single requirement, 2.90 EUR if the human answered within 60 minutes of admission, 1.45 EUR if later, in the asset of the admission. Read the result from the completed response. Never send a private key.",
+    "x-guidance": "POST /verify with intent, claim and your wallet as agent_id. Pay the 402: its accepts list every asset taken (USDC first) and extensions.service-windows carries every later price. Store verify_id, then wait for the callback or poll GET /verify/{verify_id} (free). When status is ready, POST /verify-unlock?id={verify_id} and pay its single requirement, 2.90 EUR if the human answered within 60 minutes of admission, 1.45 EUR if later, in the asset of the admission. Read the result from the completed response. Never send a private key.",
     "version": "3.0.0",
     "contact": {
       "name": "Verifi",
@@ -14,6 +14,9 @@
       "name": "Proprietary",
       "url": "https://verifi.cloud/"
     }
+  },
+  "x-agentcash-guidance": {
+    "llmsTxtUrl": "https://verifi.cloud/llms.txt"
   },
   "servers": [
     {
@@ -372,7 +375,8 @@
               }
             }
           }
-        }
+        },
+        "security": []
       }
     },
     "/verify/{verify_id}": {
