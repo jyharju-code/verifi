@@ -50,7 +50,8 @@ server {
     }
 
     location /verify {
-        limit_req zone=verify_per_ip burst=15 nodelay;
+        limit_req zone=verify_per_ip burst=40 nodelay;
+        limit_req_status 429;
         set $verify_upstream verify-api:8702;
         proxy_pass http://$verify_upstream;
         proxy_set_header Host $host;

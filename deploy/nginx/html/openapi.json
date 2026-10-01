@@ -894,7 +894,9 @@
               }
             }
           }
-        }
+        },
+        "deprecated": true,
+        "security": []
       }
     },
     "/verify-api/health": {
