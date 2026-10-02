@@ -1,4 +1,4 @@
 {
   "version": 1,
-  "resources": ["https://verifi.cloud/verify"]
+  "resources": ["https://verifi.cloud/verify", "https://verifi.cloud/verify-unlock"]
 }

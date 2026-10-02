@@ -64,7 +64,7 @@ export function boundTerms(q, asset) {
 
 /** A core that answers the calls verify-api makes, and remembers them. */
 export async function startFakeCore() {
-  const state = { quotes: new Map(), current: null, termsStatus: 200, created: [], payments: [], verifies: new Map() };
+  const state = { quotes: new Map(), current: null, termsStatus: 200, created: [], payments: [], verifies: new Map(), credited: new Set() };
   const core = express();
   core.use(express.json());
   core.get('/internal/terms/current', (_req, res) => {
@@ -75,9 +75,10 @@ export async function startFakeCore() {
     const q = state.quotes.get(req.params.id);
     return q ? res.json(q) : res.status(404).json({ detail: 'terms not found' });
   });
-  core.get('/internal/quota', (_req, res) => res.json({
-    pending_count: 0, has_entry_entitlement: false, entitlement_admission_available: false,
-  }));
+  core.get('/internal/quota', (req, res) => {
+    const credited = state.credited.has(String(req.query.agent_id ?? '').toLowerCase());
+    return res.json({ pending_count: 0, has_entry_entitlement: credited, entitlement_admission_available: credited });
+  });
   core.post('/internal/request-audit', (_req, res) => res.json({ ok: true }));
   core.post('/internal/verifies', (req, res) => {
     state.created.push(req.body);
@@ -85,7 +86,9 @@ export async function startFakeCore() {
     const bound = q && boundTerms(q, req.body.paid_asset);
     return res.json({
       id: '0f3f7d0a-0000-4000-8000-000000000001', verify_no: 1, status: 'admission_pending',
-      agent_id: req.body.agent_id, entry_source: 'x402', entry_charged_usdc: '0.00',
+      agent_id: req.body.agent_id,
+      entry_source: req.body.admission_mode === 'entitlement' ? 'failure_credit' : 'x402',
+      entry_charged_usdc: '0.00',
       contract_version: 3, terms_id: req.body.terms_id, bound_terms: bound,
       bound_asset: req.body.paid_asset, bound_network: NETWORK,
       entry_amount_atomic: bound?.admission, entry_charged_atomic: null,
