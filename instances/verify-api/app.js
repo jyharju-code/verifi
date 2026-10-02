@@ -109,6 +109,18 @@ function unlockDiscoveryDeclaration() {
  * URL of an x402 facilitator, for example the self-hosted one at
  * http://facilitator:8080. Keys alone never switch anything.
  */
+/**
+ * Service metadata for discovery catalogs. The CDP Bazaar records it from a
+ * settled payment's resource, and Agentic.Market shows it. Limits from the
+ * bazaar sanitizer: name and each tag up to 32 printable ASCII characters,
+ * at most five tags.
+ */
+const SERVICE_METADATA = {
+  serviceName: 'Verifi',
+  tags: ['human-in-the-loop', 'human-verification', 'fact-check', 'ai-agents', 'review'],
+  iconUrl: 'https://verifi.cloud/icon-512.png',
+};
+
 export function facilitatorConfig(env, url) {
   if (url !== 'cdp') return { url };
   if (!env.CDP_API_KEY_ID || !env.CDP_API_KEY_SECRET) {
@@ -292,6 +304,7 @@ export function createApp({ env = process.env, facilitatorClient } = {}) {
             })),
             description: 'Gate 1 of one Verifi chain. Admit one request to the human queue.',
             mimeType: 'application/json',
+          ...SERVICE_METADATA,
             extensions: { ...serviceWindowsDeclaration(), ...discoveryDeclaration() },
           },
         },
@@ -318,6 +331,7 @@ export function createApp({ env = process.env, facilitatorClient } = {}) {
             'Gates 2 and 3 of the same Verifi chain. Unlock its ready human result at the SLA ' +
             'or grace price decided when the human answered, in the asset the admission was paid in.',
           mimeType: 'application/json',
+          ...SERVICE_METADATA,
           extensions: serviceWindowsDeclaration(UNLOCK_INFO_SCHEMA),
         },
       },
@@ -341,6 +355,7 @@ export function createApp({ env = process.env, facilitatorClient } = {}) {
             'admission, 1.45 EUR within 24 hours. Name the chain with ?id=<verify_id>; the 402 for ' +
             'a named ready chain asks for its one exact price.',
           mimeType: 'application/json',
+          ...SERVICE_METADATA,
           extensions: { ...serviceWindowsDeclaration(), ...unlockDiscoveryDeclaration() },
           unpaidResponseBody: async () => ({
             contentType: 'application/json',
