@@ -425,6 +425,7 @@
         <div class="eyebrow">Gate 2 or gate 3</div>
         <h2>Unlock the human answer</h2>
         <p>Use MCP <code>unlock_verify</code> or HTTP <code>POST /verify-unlock?id={verify_id}</code> only after status becomes <code>ready</code>. Before that the endpoint answers <code>409</code> and asks for no payment.</p>
+        <p>Without <code>?id=</code> naming a chain, or with an unknown id, the endpoint answers <code>402</code> with the unlock price band: every accepted asset at both the SLA and the grace price. That <code>402</code> only describes the prices. A payment made against it is refused with <code>400</code> or <code>404</code> and never settled.</p>
         <p>The unlock returns exactly one <code>exact</code> requirement: the asset the admission was paid in, at <code>service_window.unlock_amount</code>. Its <code>extensions["service-windows"].info</code> repeats <code>terms_id</code>, <code>applied</code>, <code>admitted_at</code>, and <code>ready_at</code>, so the agent can check the arithmetic against the terms it paid for at admission. Refuse to sign if the asset differs or the amount is higher than the bound amount for the applied window. An admission credit never covers this gate.</p>
         <pre><code>{
   "verify_id": "a1b2c3d4-0000-4000-8000-000000000000",
@@ -497,6 +498,7 @@ const verify = await response.json();</code></pre>
     "entry_credit_value_usdc": null
   }
 }</code></pre>
+        <p>To spend a credit, the wallet signs the ordinary <code>402</code> for gate 1. Verifi checks that the signature comes from <code>agent_id</code>, uses the credit, and never submits the payment, so no funds move. A signature from any other wallet is settled as a normal payment, so nobody can spend another wallet's credit.</p>
         <p>The credit is not cash. It pays only the admission of the same wallet's next request, which is then bound to the same asset as the expired chain. The unlock of that next request still costs the SLA or grace price when its answer is ready. <code>entry_credit_value_usdc</code> is the admission price on a USDC chain and <code>null</code> on an EURC chain.</p>
       </section>
 

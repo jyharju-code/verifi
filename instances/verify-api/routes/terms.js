@@ -232,6 +232,22 @@ export function admissionPrice(symbol, network) {
   };
 }
 
+/**
+ * DynamicPrice for the unlock band: what a cold probe of /verify-unlock is
+ * shown when no ready chain is named. One option per asset and window, from
+ * the current quote, so directories see a real 402 with both unlock prices.
+ * A payment against the band never unlocks anything: the handler behind it
+ * always refuses, and x402 cancels settlement for any 4xx.
+ */
+export function unlockBandPrice(symbol, network, window) {
+  return async (ctx) => {
+    const quote = await admissionQuote(ctx);
+    advertised.set(ctx.adapter, { info: quote.terms, schema: INFO_SCHEMA });
+    const gate = window === 'grace' && !quote.terms.windows?.grace ? 'sla' : window;
+    return assetAmount(quote, symbol, network, gate);
+  };
+}
+
 const UUID_RE = /^[0-9a-f-]{36}$/i;
 
 async function fetchUnlockVerify(ctx) {

@@ -47,7 +47,7 @@
         ],
         "operationId": "createVerify",
         "summary": "Gate 1: submit a claim and enter the human queue",
-        "description": "Submits work for a human and admits it to the queue.\n\nEvery admission is paid. If the wallet has an earned admission credit, admission is free and the response is 202. Otherwise the endpoint answers 402. Its PAYMENT-REQUIRED header carries two exact options for 0.10 EUR, USDC first (converted at the ECB euro reference rate, rounded up to the cent) and EURC second, and the full terms of the chain in extensions[\"service-windows\"]: both windows, the unlock prices for each asset, the conversion, and terms_valid_until. Pick one option, sign it with the requester wallet, and repeat the same request while the quote is valid (about 10 minutes). A payment signed against an expired quote is not settled: the answer is a fresh 402 with fresh terms.\n\nThe asset paid here binds the chain, and the unlock is paid in the same asset. The unlock costs 1.45 to 2.90 EUR, decided by when the human answered: 2.90 EUR if ready_at is within 60 minutes of admitted_at, 1.45 EUR if it is later, within 24 hours. There is no cancellation. If nobody answers within 24 hours the chain fails with reason human_timeout and the wallet's next admission is free.\n\nA paid chain does not enter the human queue before its admission settlement is recorded. A refused request never charges the caller: x402 cancels settlement for any 4xx or 5xx answer, so the signed authorization is never submitted. This endpoint therefore answers 402 whenever the caller has no entitlement, including while the human queue is full, and answers 400, 409, or a full queue 503 only after the payment gate. When no quote can be issued it answers 503 instead of 402.\n\nStore verify_id from the response. It is the only durable handle for the rest of the chain.",
+        "description": "Submits work for a human and admits it to the queue.\n\nEvery admission is paid, and every caller first receives a 402. A wallet with an earned admission credit signs that 402 as usual: Verifi checks that the signature comes from agent_id, for the admission price of a valid quote, then uses the credit, answers 202, and never submits the payment. A signature from any other wallet is settled as a normal payment, so nobody can spend another wallet's credit. Its PAYMENT-REQUIRED header carries two exact options for 0.10 EUR, USDC first (converted at the ECB euro reference rate, rounded up to the cent) and EURC second, and the full terms of the chain in extensions[\"service-windows\"]: both windows, the unlock prices for each asset, the conversion, and terms_valid_until. Pick one option, sign it with the requester wallet, and repeat the same request while the quote is valid (about 10 minutes). A payment signed against an expired quote is not settled: the answer is a fresh 402 with fresh terms.\n\nThe asset paid here binds the chain, and the unlock is paid in the same asset. The unlock costs 1.45 to 2.90 EUR, decided by when the human answered: 2.90 EUR if ready_at is within 60 minutes of admitted_at, 1.45 EUR if it is later, within 24 hours. There is no cancellation. If nobody answers within 24 hours the chain fails with reason human_timeout and the wallet's next admission is free.\n\nA paid chain does not enter the human queue before its admission settlement is recorded. A refused request never charges the caller: x402 cancels settlement for any 4xx or 5xx answer, so the signed authorization is never submitted. This endpoint therefore answers 402 whenever the caller has no entitlement, including while the human queue is full, and answers 400, 409, or a full queue 503 only after the payment gate. When no quote can be issued it answers 503 instead of 402.\n\nStore verify_id from the response. It is the only durable handle for the rest of the chain.",
         "x-payment-info": {
           "price": {
             "mode": "fixed",
@@ -590,7 +590,20 @@
         ],
         "operationId": "unlockVerify",
         "summary": "Gates 2 and 3: unlock the ready human result",
-        "description": "Call this only when status is ready. Before that the endpoint answers 409 and asks for no payment.\n\nThe unlock costs 1.45 to 2.90 EUR, decided by when the human answered: 2.90 EUR (SLA price) if ready_at is within 60 minutes of admitted_at, 1.45 EUR (grace price) if it is later, within 24 hours. A boundary instant belongs to the earlier window. When the agent polls or unlocks does not change the price.\n\nThe endpoint answers 402 with exactly one exact requirement: the asset the admission was paid in, at service_window.unlock_amount. With 1 EUR = 1.17 USD that is 3400000 (SLA) or 1700000 (grace) atomic USDC, and 2900000 or 1450000 atomic EURC. Its extensions[\"service-windows\"].info repeats terms_id, applied, admitted_at, ready_at, network, asset, and unlock_amount, so the agent can check the arithmetic against the terms it paid for at admission. Refuse to sign if the asset differs or the amount is higher than the bound amount for the applied window. Sign the requirement with the requester wallet and repeat the same request. An admission credit never covers this gate.\n\nThe result body is released only after the unlock settlement succeeds. Unlocking twice does not charge twice: once the chain is completed, the answer is returned without a new payment.",
+        "description": "Call this only when status is ready. Before that the endpoint answers 409 and asks for no payment.\n\nWithout ?id= naming a chain, or with an unknown id, the endpoint answers 402 with the unlock price band: every accepted asset at both the SLA and the grace price, from the current quote. That 402 describes the prices; it unlocks nothing. A payment made against it is refused with 400 or 404 and never settled.\n\nThe unlock costs 1.45 to 2.90 EUR, decided by when the human answered: 2.90 EUR (SLA price) if ready_at is within 60 minutes of admitted_at, 1.45 EUR (grace price) if it is later, within 24 hours. A boundary instant belongs to the earlier window. When the agent polls or unlocks does not change the price.\n\nThe endpoint answers 402 with exactly one exact requirement: the asset the admission was paid in, at service_window.unlock_amount. With 1 EUR = 1.17 USD that is 3400000 (SLA) or 1700000 (grace) atomic USDC, and 2900000 or 1450000 atomic EURC. Its extensions[\"service-windows\"].info repeats terms_id, applied, admitted_at, ready_at, network, asset, and unlock_amount, so the agent can check the arithmetic against the terms it paid for at admission. Refuse to sign if the asset differs or the amount is higher than the bound amount for the applied window. Sign the requirement with the requester wallet and repeat the same request. An admission credit never covers this gate.\n\nThe result body is released only after the unlock settlement succeeds. Unlocking twice does not charge twice: once the chain is completed, the answer is returned without a new payment.",
+        "x-payment-info": {
+          "price": {
+            "mode": "dynamic",
+            "currency": "EUR",
+            "min": "1.45",
+            "max": "2.90"
+          },
+          "protocols": [
+            {
+              "x402": {}
+            }
+          ]
+        },
         "parameters": [
           {
             "$ref": "#/components/parameters/VerifyIdQuery"
@@ -789,7 +802,7 @@
             }
           },
           "400": {
-            "description": "The id query parameter is missing or is not a UUID.",
+            "description": "Returned only for a payment made against the unlock price band when the id query parameter is missing or is not a UUID. The payment was refused and not taken.",
             "content": {
               "application/json": {
                 "schema": {
@@ -805,7 +818,8 @@
             "$ref": "#/components/responses/PaymentRequiredUnlock"
           },
           "404": {
-            "$ref": "#/components/responses/NotFound"
+            "$ref": "#/components/responses/NotFound",
+            "description": "Returned only for a payment made against the unlock price band when no chain has this id. The payment was refused and not taken."
           },
           "409": {
             "description": "The chain is not in a state that can be unlocked: the human has not answered yet, or the chain failed. No payment is requested.",

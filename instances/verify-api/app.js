@@ -38,7 +38,9 @@ import {
   serviceWindowsExtension,
   UNLOCK_INFO_SCHEMA,
   unlockPrice,
+  unlockBandPrice,
 } from './routes/terms.js';
+import { proveWallet } from './routes/proof.js';
 
 const UUID_RE = /^[0-9a-f-]{36}$/i;
 
@@ -68,6 +70,30 @@ function discoveryDeclaration() {
         status: 'processing',
         next_action: 'poll',
         poll_url: '/verify/0f3f7d0a-0000-4000-8000-000000000000',
+        contract_version: 3,
+      },
+    },
+  });
+}
+
+/** Bazaar discovery for the unlock: no body, the chain is named by ?id=. */
+function unlockDiscoveryDeclaration() {
+  return declareDiscoveryExtension({
+    bodyType: 'json',
+    input: {},
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+      description: 'No body. Name the ready chain with the id query parameter: POST /verify-unlock?id=<verify_id>.',
+    },
+    output: {
+      example: {
+        verify_id: '0f3f7d0a-0000-4000-8000-000000000000',
+        status: 'completed',
+        verdict: 'refined',
+        explanation: 'Use the corrected delivery date: 22 July.',
+        next_action: 'done',
         contract_version: 3,
       },
     },
@@ -117,9 +143,19 @@ export function createApp({ env = process.env, facilitatorClient } = {}) {
             error: 'one active verify per agent_id',
             detail: 'Poll the previous verify until it is completed or failed.',
           });
-        case 'entitlement':
+        case 'entitlement': {
+          // A free admission is spent only by the wallet's owner. The wallet
+          // gets the same 402 as everyone, signs it, and the signature is
+          // checked here instead of being settled, so no funds move. Without
+          // paid gates there is no 402 to sign, and the address is trusted.
+          if (X402_PAY_TO) {
+            const proof = await proveWallet(req, { agentId, payTo: X402_PAY_TO, network: X402_NETWORK });
+            if (!proof.ok) return next('route');
+            req.walletProven = true;
+          }
           req.admissionMode = 'entitlement';
           return await handleVerify(req, res);
+        }
         default:
           return next('route');
       }
@@ -133,12 +169,26 @@ export function createApp({ env = process.env, facilitatorClient } = {}) {
   // configured. Other ready results fall through to the paid route.
   app.post('/verify-unlock', async (req, res, next) => {
     const id = String(req.query.id ?? '');
+    // With paid gates on, a request that names no chain goes to the unlock
+    // band gate instead of a 400 or 404: a cold probe then sees a real 402
+    // with both unlock prices. Paying it unlocks nothing; the handler refuses
+    // and x402 cancels settlement for that 4xx.
     if (!UUID_RE.test(id)) {
+      if (X402_PAY_TO) {
+        req.unlockProbe = 'bad_id';
+        return next('route');
+      }
       return res.status(400).json({ error: 'pass the verify id as ?id=<uuid>' });
     }
     if (req.auditContext) req.auditContext.verify_id = id;
     const { status, body } = await getVerify(id);
-    if (status === 404) return res.status(404).json({ error: 'verify not found' });
+    if (status === 404) {
+      if (X402_PAY_TO) {
+        req.unlockProbe = 'not_found';
+        return next('route');
+      }
+      return res.status(404).json({ error: 'verify not found' });
+    }
     if (status !== 200) return res.status(502).json({ error: 'verification backend unavailable' });
     if (req.auditContext) {
       req.auditContext.verify_no = body.verify_no ?? null;
@@ -236,27 +286,69 @@ export function createApp({ env = process.env, facilitatorClient } = {}) {
       },
     );
 
+    // Gates 2 and 3, for a named ready chain: exactly one option, the bound
+    // asset at the amount decided when the human answered.
+    const unlockRecordGate = paymentMiddleware(
+      {
+        'POST /verify-unlock': {
+          accepts: {
+            scheme: 'exact',
+            price: unlockPrice(X402_UNLOCK_PRICE, X402_NETWORK),
+            network: X402_NETWORK,
+            payTo: X402_PAY_TO,
+          },
+          description:
+            'Gates 2 and 3 of the same Verifi chain. Unlock its ready human result at the SLA ' +
+            'or grace price decided when the human answered, in the asset the admission was paid in.',
+          mimeType: 'application/json',
+          extensions: serviceWindowsDeclaration(UNLOCK_INFO_SCHEMA),
+        },
+      },
+      resourceServer,
+    );
+
+    // The unlock band, for a request that names no chain (a cold probe):
+    // every asset at both window prices, so a directory sees a real 402. The
+    // handler below refuses any payment made here, so it can never settle.
+    const unlockBandGate = paymentMiddleware(
+      {
+        'POST /verify-unlock': {
+          accepts: assetSymbols(env).flatMap((symbol) => ['sla', 'grace'].map((window) => ({
+            scheme: 'exact',
+            price: unlockBandPrice(symbol, X402_NETWORK, window),
+            network: X402_NETWORK,
+            payTo: X402_PAY_TO,
+          }))),
+          description:
+            'Unlock a ready Verifi result: 2.90 EUR if the human answered within 60 minutes of ' +
+            'admission, 1.45 EUR within 24 hours. Name the chain with ?id=<verify_id>; the 402 for ' +
+            'a named ready chain asks for its one exact price.',
+          mimeType: 'application/json',
+          extensions: { ...serviceWindowsDeclaration(), ...unlockDiscoveryDeclaration() },
+          unpaidResponseBody: async () => ({
+            contentType: 'application/json',
+            body: {
+              error: 'pass the verify id of a ready chain as ?id=<uuid>',
+              detail: 'This 402 shows the unlock price band. A payment without a ready chain is refused and never taken.',
+            },
+          }),
+        },
+      },
+      resourceServer,
+    );
+
     app.post(
       '/verify-unlock',
-      paymentMiddleware(
-        {
-          'POST /verify-unlock': {
-            accepts: {
-              scheme: 'exact',
-              price: unlockPrice(X402_UNLOCK_PRICE, X402_NETWORK),
-              network: X402_NETWORK,
-              payTo: X402_PAY_TO,
-            },
-            description:
-              'Gates 2 and 3 of the same Verifi chain. Unlock its ready human result at the SLA ' +
-              'or grace price decided when the human answered, in the asset the admission was paid in.',
-            mimeType: 'application/json',
-            extensions: serviceWindowsDeclaration(UNLOCK_INFO_SCHEMA),
-          },
-        },
-        resourceServer,
-      ),
+      (req, res, next) => (req.unlockProbe ? unlockBandGate : unlockRecordGate)(req, res, next),
       (req, res) => {
+        if (req.unlockProbe) {
+          // A payment against the band names no ready chain. Refusing with a
+          // 4xx makes x402 cancel settlement, so the signed authorization is
+          // never submitted and no funds move.
+          return req.unlockProbe === 'not_found'
+            ? res.status(404).json({ error: 'verify not found', detail: 'No payment was taken.' })
+            : res.status(400).json({ error: 'pass the verify id as ?id=<uuid>', detail: 'No payment was taken.' });
+        }
         // This handler runs only after the current unlock request's x402
         // signature has been verified. A previous paid entry is not proof that
         // an unauthenticated caller controls the wallet.

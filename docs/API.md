@@ -66,8 +66,9 @@ paid in. It does not pay an unlock.
 2. If the server returns `402`, read the terms in
    `extensions["service-windows"]`, choose one of the `accepts` options (USDC
    is listed first, EURC second), complete the x402 payment, and repeat the
-   same request. An earned admission credit, if the wallet has one, passes
-   this gate without a payment.
+   same request. If the wallet has an earned admission credit, sign the
+   402 the same way: Verifi checks the signature comes from `agent_id`, uses
+   the credit instead, and never submits the payment.
 3. Store the returned `verify_id` immediately. Prefer an HTTPS `callback_url`
    so the agent can yield until Verifi reports `ready` or `failed`.
 4. If no callback is available, or callback delivery fails, poll
@@ -270,6 +271,11 @@ On a USDC chain `unlock.price_usdc` is the decimal USDC price, for example
 
 Call only when the callback or polling reports `ready`. Before that the
 endpoint answers `409` and asks for no payment.
+
+Without `?id=` naming a chain, or with an unknown id, the endpoint answers
+`402` with the unlock price band: every accepted asset at both the SLA and the
+grace price. That `402` only describes the prices. A payment made against it
+is refused with `400` or `404` and never settled.
 
 The endpoint returns HTTP `402` with exactly one `exact` requirement: the
 asset the admission was paid in, at `service_window.unlock_amount`. Its

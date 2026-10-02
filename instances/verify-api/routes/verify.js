@@ -471,7 +471,7 @@ export async function handleVerify(req, res) {
       ? 'x402_paid'
       : (entrySource === 'failure_credit' ? 'credit' : 'entitlement');
     req.auditContext.outcome = 'admitted';
-    req.auditContext.wallet_ownership_proven = req.admissionMode === 'x402';
+    req.auditContext.wallet_ownership_proven = req.admissionMode === 'x402' || req.walletProven === true;
   }
 
   res.set('Retry-After', String(RETRY_AFTER_S));
