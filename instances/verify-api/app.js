@@ -14,6 +14,7 @@ import express from 'express';
 import { paymentMiddleware, x402ResourceServer, RouteConfigurationError } from '@x402/express';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { HTTPFacilitatorClient } from '@x402/core/server';
+import { createFacilitatorConfig } from '@coinbase/x402';
 import { declareDiscoveryExtension, bazaarResourceServerExtension } from '@x402/extensions/bazaar';
 import {
   verifyRouter,
@@ -98,6 +99,22 @@ function unlockDiscoveryDeclaration() {
       },
     },
   });
+}
+
+/**
+ * Which facilitator verifies and settles payments. FACILITATOR_URL=cdp selects
+ * Coinbase's hosted CDP facilitator, authenticated with CDP_API_KEY_ID and
+ * CDP_API_KEY_SECRET; it pays settlement gas itself, and its settlements are
+ * the ones directories such as x402scan can attribute. Any other value is the
+ * URL of an x402 facilitator, for example the self-hosted one at
+ * http://facilitator:8080. Keys alone never switch anything.
+ */
+export function facilitatorConfig(env, url) {
+  if (url !== 'cdp') return { url };
+  if (!env.CDP_API_KEY_ID || !env.CDP_API_KEY_SECRET) {
+    throw new Error('FACILITATOR_URL=cdp needs CDP_API_KEY_ID and CDP_API_KEY_SECRET');
+  }
+  return createFacilitatorConfig(env.CDP_API_KEY_ID, env.CDP_API_KEY_SECRET);
 }
 
 export function createApp({ env = process.env, facilitatorClient } = {}) {
@@ -225,7 +242,7 @@ export function createApp({ env = process.env, facilitatorClient } = {}) {
   let checkFacilitatorSupport = async () => {};
 
   if (X402_PAY_TO) {
-    const facilitator = facilitatorClient ?? new HTTPFacilitatorClient({ url: FACILITATOR_URL });
+    const facilitator = facilitatorClient ?? new HTTPFacilitatorClient(facilitatorConfig(env, FACILITATOR_URL));
     const resourceServer = new x402ResourceServer(facilitator)
       .register(X402_NETWORK, new ExactEvmScheme())
       .registerExtension(serviceWindowsExtension)
