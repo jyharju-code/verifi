@@ -12,12 +12,15 @@
     "test": "node --test"
   },
   "dependencies": {
-    "@coinbase/x402": "^2.1.0",
+    "@coinbase/x402": "2.1.0",
     "@x402/core": "^2.18.0",
     "@x402/evm": "^2.18.0",
     "@x402/express": "^2.18.0",
     "@x402/extensions": "^2.18.0",
     "express": "^4.21.2",
     "viem": "^2.55.2"
+  },
+  "overrides": {
+    "@coinbase/cdp-sdk": "1.53.0"
   }
 }
