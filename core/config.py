@@ -17,6 +17,20 @@ def _require(name: str) -> str:
     return value
 
 
+# Shared secrets guard money and admin surfaces. A short or empty one fails
+# open or invites guessing, so a process that needs one refuses to start.
+# openssl rand -hex 24 yields 48 characters.
+MIN_SECRET_LENGTH = 32
+
+
+def require_secret(name: str, value: str) -> None:
+    if len(value) < MIN_SECRET_LENGTH:
+        raise RuntimeError(
+            f"{name} must be set to at least {MIN_SECRET_LENGTH} characters "
+            "(generate one with: openssl rand -hex 24)"
+        )
+
+
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://verifi:verifi@localhost:5432/verifi")
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -47,5 +61,6 @@ PAYOUTS_AUTO = os.environ.get("PAYOUTS_AUTO", "false").lower() == "true"
 
 # Agent-facing wait budget for a synchronous verify response.
 
-# Long random token for the /admin dashboard. Empty disables the dashboard.
+# Long random token for the /admin dashboard. Empty disables the dashboard;
+# a set token shorter than MIN_SECRET_LENGTH stops the core API from starting.
 DASHBOARD_TOKEN = os.environ.get("DASHBOARD_TOKEN", "")

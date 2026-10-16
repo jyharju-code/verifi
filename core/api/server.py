@@ -50,9 +50,8 @@ REQUEST_AUDIT_RETENTION_DAYS = min(
 
 # Shared secret between the instance servers and this core API. The /internal
 # routes settle money and reveal request content, so they must never be trusted
-# on network isolation alone. When set, every /internal request must present it
-# in X-Internal-Secret. Empty keeps the isolation-only behaviour for older
-# deployments that have not provisioned the secret on both sides yet.
+# on network isolation alone. Every /internal request must present it in
+# X-Internal-Secret, and the core API refuses to start without it.
 CORE_INTERNAL_SECRET = os.environ.get("CORE_INTERNAL_SECRET", "")
 
 # Contract v3 pricing configuration (D12). Loaded once and validated at
@@ -688,6 +687,10 @@ async def lifespan(app: FastAPI):
     # A private key in this process would mean the deployment leaked one into
     # the wrong container. Refuse to start rather than run with it.
     wallets.assert_no_private_keys()
+    # The money surface and the dashboard fail closed: no secret, no start.
+    config.require_secret("CORE_INTERNAL_SECRET", CORE_INTERNAL_SECRET)
+    if config.DASHBOARD_TOKEN:
+        config.require_secret("DASHBOARD_TOKEN", config.DASHBOARD_TOKEN)
     for problem in wallets.validate_addresses():
         log.warning("wallet configuration: %s", problem)
     # D12: an invalid window or price configuration refuses to start.
@@ -723,13 +726,15 @@ async def _guard_internal(request: Request, call_next):
     """Authenticate the internal money surface with a shared secret.
 
     Only /internal/* is guarded: /health, /contact, and /admin have their own
-    contracts (liveness, public form, dashboard token). Enforced only when the
-    secret is configured, so it can be rolled out on both sides without a
-    flag day.
+    contracts (liveness, public form, dashboard token). The lifespan refuses
+    to start without the secret; an empty one here still rejects, because
+    an empty header would otherwise match it.
     """
-    if CORE_INTERNAL_SECRET and request.url.path.startswith("/internal/"):
+    if request.url.path.startswith("/internal/"):
         supplied = request.headers.get("x-internal-secret", "")
-        if not hmac.compare_digest(supplied, CORE_INTERNAL_SECRET):
+        if not CORE_INTERNAL_SECRET or not hmac.compare_digest(
+            supplied.encode(), CORE_INTERNAL_SECRET.encode()
+        ):
             log.warning("rejected unauthenticated /internal call to %s", request.url.path)
             return JSONResponse({"detail": "unauthorized"}, status_code=401)
     return await call_next(request)
