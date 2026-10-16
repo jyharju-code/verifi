@@ -16,6 +16,17 @@ process.on('unhandledRejection', (reason) => {
   console.error('unhandled rejection, still serving:', reason?.message ?? reason);
 });
 
+// The core API rejects every /internal call without the shared secret, so a
+// missing one would leave every verify failing at runtime. Fail at boot instead.
+const MIN_SECRET_LENGTH = 32;
+if ((process.env.CORE_INTERNAL_SECRET ?? '').length < MIN_SECRET_LENGTH) {
+  console.error(
+    `CORE_INTERNAL_SECRET must be set to at least ${MIN_SECRET_LENGTH} characters ` +
+      '(generate one with: openssl rand -hex 24)',
+  );
+  process.exit(1);
+}
+
 const { app, checkFacilitatorSupport } = createApp();
 
 app.listen(PORT, HOST, () => {

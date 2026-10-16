@@ -94,6 +94,13 @@ def build_application() -> Application:
 def main() -> None:
     if not config.TELEGRAM_BOT_TOKEN:
         raise SystemExit("TELEGRAM_BOT_TOKEN is not set")
+    # Without a secret token anyone who can reach /bot could post updates
+    # that claim to come from the admin, so webhook mode never runs without one.
+    if config.BOT_MODE == "webhook":
+        try:
+            config.require_secret("TELEGRAM_WEBHOOK_SECRET", config.TELEGRAM_WEBHOOK_SECRET)
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from None
     app = build_application()
     if config.BOT_MODE == "webhook":
         app.run_webhook(
@@ -101,7 +108,7 @@ def main() -> None:
             port=config.BOT_PORT,
             url_path="bot",
             webhook_url=f"{config.PUBLIC_BASE_URL}/bot",
-            secret_token=config.TELEGRAM_WEBHOOK_SECRET or None,
+            secret_token=config.TELEGRAM_WEBHOOK_SECRET,
             allowed_updates=Update.ALL_TYPES,
         )
     else:
