@@ -112,6 +112,44 @@ class McpPaymentTests(unittest.IsolatedAsyncioTestCase):
             {"X-Verifi-Source": "mcp", "X-Verifi-Route": "verify_claim"},
         )
 
+    async def test_payment_requirement_names_a_reachable_public_resource(self):
+        """resource.url must be the address the payer can reach, not the internal host.
+
+        Regression: the 402 is produced by an internal call to VERIFY_API_URL
+        (http://verify-api:8702), and its resource.url used to be copied straight
+        into the public requirement. A payer reading resource.url was handed a host
+        that resolves only inside the compose network. Measured on verifi.cloud/mcp
+        on 2026-10-18 before the fix.
+        """
+        calls = []
+        requirement = encoded_requirement("100000")
+        response = FakeResponse(
+            402,
+            {"error": "payment required"},
+            {"PAYMENT-REQUIRED": requirement},
+        )
+        with patch(
+            "core.mcp.server.httpx.AsyncClient",
+            return_value=FakeClient(response, calls),
+        ):
+            result = await verify_claim(
+                "Review a claim",
+                "The launch date is 22 July",
+                "0x1111111111111111111111111111111111111111",
+                context_with_payment(),
+            )
+
+        url = result.structuredContent["resource"]["url"]
+        self.assertEqual(url, "https://verifi.cloud/verify")
+        self.assertNotIn("verify-api", url)
+        self.assertNotIn(":8702", url)
+        # The replayed header is untouched: a client sends it back verbatim.
+        self.assertEqual(result.structuredContent["paymentRequiredHeader"], requirement)
+        decoded = json.loads(base64.b64decode(result.structuredContent["paymentRequiredHeader"]))
+        self.assertEqual(decoded["resource"]["url"], "mcp://tool/verify_claim")
+        # The terms the payer is quoted are unchanged.
+        self.assertEqual(result.structuredContent["accepts"][0]["amount"], "100000")
+
     async def test_entry_forwards_standard_mcp_payment_and_returns_receipt(self):
         calls = []
         payment = {
