@@ -175,7 +175,7 @@ export function agentStatus(v, forceUnlocked = false) {
   return 'processing';
 }
 
-function publicBase() {
+export function publicBase() {
   return String(process.env.PUBLIC_BASE_URL ?? 'https://verifi.cloud').replace(/\/+$/, '');
 }
 
