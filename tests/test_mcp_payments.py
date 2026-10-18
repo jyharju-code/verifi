@@ -150,6 +150,44 @@ class McpPaymentTests(unittest.IsolatedAsyncioTestCase):
         # The terms the payer is quoted are unchanged.
         self.assertEqual(result.structuredContent["accepts"][0]["amount"], "100000")
 
+    async def test_payment_requirement_is_the_signal_the_spec_requires(self):
+        """isError true is the payment signal, not a malfunction. Lock that in.
+
+        The x402 MCP transport says: "servers MUST return a tool result with
+        isError: true containing the PaymentRequired data", in both
+        structuredContent and content[0].text. A future reader may see isError and
+        "fix" it to false, which would silently break every x402-aware client: the
+        spec's detection step checks structuredContent for x402Version, and a
+        client that gates on isError never gets there. This test exists so that
+        change has to be argued for rather than made.
+        """
+        calls = []
+        requirement = encoded_requirement("100000")
+        response = FakeResponse(
+            402,
+            {"error": "payment required"},
+            {"PAYMENT-REQUIRED": requirement},
+        )
+        with patch(
+            "core.mcp.server.httpx.AsyncClient",
+            return_value=FakeClient(response, calls),
+        ):
+            result = await verify_claim(
+                "Review a claim",
+                "The launch date is 22 July",
+                "0x1111111111111111111111111111111111111111",
+                context_with_payment(),
+            )
+
+        # The payment signal the transport mandates.
+        self.assertTrue(result.isError)
+        # Both carriers present, and the text is the same object JSON-encoded.
+        self.assertIn("x402Version", result.structuredContent)
+        self.assertEqual(json.loads(result.content[0].text), result.structuredContent)
+        # What a client needs to tell "asked to pay" from "broken".
+        self.assertIn("accepts", result.structuredContent)
+        self.assertTrue(result.structuredContent["accepts"])
+
     async def test_entry_forwards_standard_mcp_payment_and_returns_receipt(self):
         calls = []
         payment = {
