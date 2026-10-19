@@ -291,8 +291,9 @@ async def _current_terms() -> dict | None:
 async def verifi_info() -> dict:
     """Describe Verifi before using it: what it does, how to pay, and the current price terms.
 
-    Free and needs no arguments. Returns the service summary, authentication
-    (none, only a wallet address), the live price terms (0.10 EUR admission,
+    Free and needs no arguments. Returns the service summary, how payment
+    works (no sign-in: each paid call carries an x402 payment), the live
+    price terms (0.10 EUR admission,
     then 2.90 EUR if a human answers within 60 minutes or 1.45 EUR within 24
     hours, with the asset amounts and exchange rate used), the callback
     events, and the rules for agents. Call it once to plan; the payment
