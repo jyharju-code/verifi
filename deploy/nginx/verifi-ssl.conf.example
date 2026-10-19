@@ -76,6 +76,14 @@ server {
     # MCP server (Streamable HTTP)
     location /mcp {
         limit_req zone=mcp_per_ip burst=60 nodelay;
+        add_header Access-Control-Allow-Origin "*" always;
+        add_header Access-Control-Allow-Methods "GET, POST, DELETE, OPTIONS" always;
+        add_header Access-Control-Allow-Headers "Content-Type, Accept, Authorization, Mcp-Session-Id, Mcp-Protocol-Version, Last-Event-ID" always;
+        add_header Access-Control-Expose-Headers "Mcp-Session-Id, Mcp-Protocol-Version, X-Request-ID" always;
+        add_header Access-Control-Max-Age "86400" always;
+        if ($request_method = OPTIONS) {
+            return 204;
+        }
         set $mcp_upstream mcp:8704;
         proxy_pass http://$mcp_upstream;
         proxy_set_header Host $host;
