@@ -91,6 +91,25 @@ class McpRegistryMetadataTests(unittest.TestCase):
         self.assertIn("402index-verify.txt", served)
         self.assertIn("glama.json", served)
 
+    def test_well_known_files_are_world_readable(self):
+        """A 600 file deploys cleanly, serves 403, and looks like a missing route.
+
+        nginx runs its workers unprivileged and the html tree is mounted read
+        only, so a file the worker cannot read is not a 404 but a 403 that no
+        amount of nginx config explains. This bit once already: mcp.json was
+        written 600 and answered 403 while its neighbours answered 200. Every
+        file in this directory is public by nature, so the whole directory is
+        checked rather than the newest entry.
+        """
+        directory = REPO_ROOT / "deploy" / "nginx" / "html" / ".well-known"
+
+        unreadable = [
+            f"{path.name} mode {oct(path.stat().st_mode)[-3:]}"
+            for path in directory.iterdir()
+            if path.is_file() and (path.stat().st_mode & 0o444) != 0o444
+        ]
+        self.assertEqual(unreadable, [], "nginx cannot serve these")
+
 
 if __name__ == "__main__":
     unittest.main()
