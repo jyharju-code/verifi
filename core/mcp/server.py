@@ -20,6 +20,9 @@ from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import CallToolResult, TextContent
 
 VERIFY_API = os.environ.get("VERIFY_API_URL", "http://verify-api:8702")
+# The address a payer can reach. Must be public: resource.url in a payment
+# requirement tells a stranger where to pay, so it never gets the internal host.
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://verifi.cloud").rstrip("/")
 MCP_PORT = int(os.environ.get("MCP_PORT", "8704"))
 MCP_CONTRACT_VERSION = "3.0.1"
 MCP_PAYMENT_META_KEY = "x402/payment"
@@ -117,6 +120,31 @@ def _encode_payment_signature(payment: dict | None) -> str | None:
     return base64.b64encode(encoded).decode("ascii")
 
 
+def _public_payment_requirement(payment_required: dict, tool: str) -> dict:
+    """Point the requirement's resource at the public surface, not the internal one.
+
+    The 402 arrives from an internal call (VERIFY_API_URL, e.g. http://verify-api:8702),
+    so its resource.url names a host that resolves only inside the compose network. A
+    payer reads resource.url to learn where to pay, so it must be the address that payer
+    can actually reach. PUBLIC_BASE_URL already exists for exactly this and already
+    builds the status and unlock templates (core/pricing.py).
+
+    Returns a copy: the decoded header must stay byte-identical to what came in.
+    """
+    requirement = json.loads(json.dumps(payment_required))
+    resource = requirement.get("resource")
+    if isinstance(resource, dict) and resource.get("url"):
+        resource["url"] = f"{PUBLIC_BASE_URL}/verify"
+    else:
+        requirement["resource"] = {
+            "url": f"{PUBLIC_BASE_URL}/verify",
+            "description": f"Gate 1 of one Verifi chain. Admit one request to the human queue.",
+            "mimeType": "application/json",
+            "serviceName": "Verifi",
+        }
+    return requirement
+
+
 def _payment_result(resp: httpx.Response, *, tool: str, price: str) -> CallToolResult:
     """Translate HTTP x402 responses to the standard MCP payment shape."""
     body = resp.json()
@@ -131,10 +159,13 @@ def _payment_result(resp: httpx.Response, *, tool: str, price: str) -> CallToolR
             "error",
             f"{price} payment is required. Sign it with the requester wallet and retry {tool}.",
         )
+        # paymentRequiredHeader stays exactly as received: clients replay it verbatim,
+        # and a rewritten header would no longer match what the server signed.
         payment_required["paymentRequiredHeader"] = required
+        public_requirement = _public_payment_requirement(payment_required, tool)
         return CallToolResult(
-            content=[TextContent(type="text", text=json.dumps(payment_required))],
-            structuredContent=payment_required,
+            content=[TextContent(type="text", text=json.dumps(public_requirement))],
+            structuredContent=public_requirement,
             isError=True,
         )
 

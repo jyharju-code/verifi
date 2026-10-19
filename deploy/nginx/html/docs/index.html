@@ -294,6 +294,7 @@
   "resource": { "url": "mcp://tool/verify_claim" }
 }</code></pre>
         <p>The MCP payment client signs the selected requirement with the requester wallet and repeats the same tool call using <code>x402/payment</code> metadata. A successful call returns <code>x402/payment-response</code> with the settlement receipt. Generic MCP clients can use the optional <code>payment_signature</code> argument instead.</p>
+        <div class="callout"><strong>A payment request looks like an error, by spec.</strong> The x402 MCP transport requires the requirement to arrive with <code>isError: true</code>, in both <code>structuredContent</code> and <code>content[0].text</code>. It means the tool was called without payment, not that the tool failed. Before treating <code>isError</code> as a failure, check whether <code>structuredContent</code> carries <code>x402Version</code>: that is what separates "asked to pay" from "genuinely broken". The <code>resource.url</code> in that result is always the public address, never an internal one.</div>
         <div class="callout"><strong>Never send a private key.</strong> Verifi receives only the signed, single-use x402 authorization. The admission and the unlock require separate signatures tied to the same <code>verify_id</code>.</div>
       </section>
 

@@ -29,6 +29,7 @@ import {
   isWallet,
   WALLET_ADDRESS_ERROR,
   auditRequest,
+  publicBase,
 } from './routes/verify.js';
 import {
   admissionPrice,
@@ -303,6 +304,7 @@ export function createApp({ env = process.env, facilitatorClient } = {}) {
               payTo: X402_PAY_TO,
             })),
             description: 'Gate 1 of one Verifi chain. Admit one request to the human queue.',
+            resource: `${publicBase()}/verify`,
             mimeType: 'application/json',
           ...SERVICE_METADATA,
             extensions: { ...serviceWindowsDeclaration(), ...discoveryDeclaration() },
@@ -330,6 +332,7 @@ export function createApp({ env = process.env, facilitatorClient } = {}) {
           description:
             'Gates 2 and 3 of the same Verifi chain. Unlock its ready human result at the SLA ' +
             'or grace price decided when the human answered, in the asset the admission was paid in.',
+          resource: `${publicBase()}/verify-unlock`,
           mimeType: 'application/json',
           ...SERVICE_METADATA,
           extensions: serviceWindowsDeclaration(UNLOCK_INFO_SCHEMA),

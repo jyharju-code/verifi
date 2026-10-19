@@ -415,6 +415,20 @@ An x402-aware MCP client handles a paid gate as follows:
 4. Verifi forwards the signed authorization to the corresponding HTTP gate.
 5. A settled call returns the result and `x402/payment-response` metadata.
 
+**A payment request is reported as a tool error on purpose.** The x402 MCP
+transport requires it: "servers MUST return a tool result with `isError: true`
+containing the `PaymentRequired` data", in both `structuredContent` and
+`content[0].text`. So `isError: true` here does not mean the tool broke. It means
+the tool was called without payment, which is the signal a client acts on. A client
+must therefore never treat `isError` as "the tool failed" before checking whether
+`structuredContent` carries `x402Version`; that check is what separates "asked to
+pay" from "genuinely broken".
+
+The `resource.url` in that result is the public address, `https://verifi.cloud/verify`
+(or `/verify-unlock` for an unlock), never an internal one. A payer reads that field
+to learn where to send the payment, so it has to be reachable from where the payer
+stands.
+
 The private key stays in the agent's wallet. Only the signed, single-use x402
 authorization is sent through MCP. The admission and the unlock require
 separate signatures and remain tied to the same `verify_id`. Generic MCP

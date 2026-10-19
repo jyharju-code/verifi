@@ -56,6 +56,60 @@ class McpRegistryMetadataTests(unittest.TestCase):
             nginx_config,
         )
 
+    def test_well_known_mcp_names_the_endpoint_it_advertises(self):
+        """mcpub.dev refuses a submission without this file, content free.
+
+        Its submit tool answered well_known_missing with required_url
+        https://verifi.cloud/.well-known/mcp.json. The file content is
+        unconstrained, so the only failure that matters is naming an endpoint
+        that does not exist: a directory would list a server that never answers.
+        The URL is read from the same file the tests already trust rather than
+        repeated here, so a move cannot leave the two disagreeing.
+        """
+        well_known = (
+            REPO_ROOT / "deploy" / "nginx" / "html" / ".well-known" / "mcp.json"
+        )
+        document = json.loads(well_known.read_text())
+
+        self.assertEqual(document["name"], "verifi")
+        self.assertEqual(document["mcp"], "https://verifi.cloud/mcp")
+        self.assertTrue(document["description"].strip())
+
+    def test_well_known_mcp_is_static_beside_the_files_nginx_already_serves(self):
+        """No location block is needed, and adding one would be the bug.
+
+        nginx serves this directory from root with a default type, which is how
+        402index-verify.txt and glama.json answer 200 today. A file placed
+        anywhere else in the tree would deploy cleanly and 404 forever, which is
+        exactly the state this task exists to leave.
+        """
+        directory = REPO_ROOT / "deploy" / "nginx" / "html" / ".well-known"
+        served = {path.name for path in directory.iterdir()}
+
+        self.assertIn("mcp.json", served)
+        # The precedent this relies on.
+        self.assertIn("402index-verify.txt", served)
+        self.assertIn("glama.json", served)
+
+    def test_well_known_files_are_world_readable(self):
+        """A 600 file deploys cleanly, serves 403, and looks like a missing route.
+
+        nginx runs its workers unprivileged and the html tree is mounted read
+        only, so a file the worker cannot read is not a 404 but a 403 that no
+        amount of nginx config explains. This bit once already: mcp.json was
+        written 600 and answered 403 while its neighbours answered 200. Every
+        file in this directory is public by nature, so the whole directory is
+        checked rather than the newest entry.
+        """
+        directory = REPO_ROOT / "deploy" / "nginx" / "html" / ".well-known"
+
+        unreadable = [
+            f"{path.name} mode {oct(path.stat().st_mode)[-3:]}"
+            for path in directory.iterdir()
+            if path.is_file() and (path.stat().st_mode & 0o444) != 0o444
+        ]
+        self.assertEqual(unreadable, [], "nginx cannot serve these")
+
 
 if __name__ == "__main__":
     unittest.main()
