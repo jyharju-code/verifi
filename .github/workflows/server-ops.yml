@@ -3,9 +3,10 @@
 # forced command in authorized_keys, so this workflow can only reach the
 # verifi wrapper, never a shell. Bootstrap: docs/REMOTE_OPS.md.
 #
-# A push to main deploys automatically. Until the three OPS_* secrets exist
-# the job skips with a notice instead of failing, so this workflow is safe
-# to merge before the server side is bootstrapped.
+# A push to main deploys automatically, and a weekly schedule runs cert.
+# Until the three OPS_* secrets exist the job skips with a notice instead
+# of failing, so this workflow is safe to merge before the server side is
+# bootstrapped.
 name: Server ops
 
 on:
@@ -24,6 +25,7 @@ on:
           - payments-setup
           - logging-setup
           - acceptance-logging
+          - cert
           - logs verify-api
           - logs nginx
           - logs facilitator
@@ -31,6 +33,9 @@ on:
   push:
     branches:
       - main
+  # Weekly certificate check. certbot renews only near expiry.
+  schedule:
+    - cron: "41 4 * * 1"
 
 permissions: {}
 
@@ -47,7 +52,7 @@ jobs:
           OPS_SSH_KEY: ${{ secrets.OPS_SSH_KEY }}
           OPS_SSH_HOST: ${{ secrets.OPS_SSH_HOST }}
           OPS_SSH_USER: ${{ secrets.OPS_SSH_USER }}
-          OPS_COMMAND: ${{ inputs.command || 'deploy' }}
+          OPS_COMMAND: ${{ inputs.command || (github.event_name == 'schedule' && 'cert') || 'deploy' }}
         run: |
           if [ -z "$OPS_SSH_KEY" ] || [ -z "$OPS_SSH_HOST" ]; then
             echo "OPS_SSH_KEY / OPS_SSH_HOST secrets are not set. Skipping."
