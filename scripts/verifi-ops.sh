@@ -239,8 +239,21 @@ case "$CMD" in
     /etc/cron.daily/verifi-pg-backup
     ls -la /root/backups/ | tail -3
     ;;
+  cert)
+    # Issue, expand or renew the one certificate (verifi.cloud and www) by
+    # webroot, then reload nginx so it serves the new files. Idempotent:
+    # certbot does nothing until the certificate is near expiry or a name is
+    # missing, so a scheduled run doubles as renewal. See docs/TLS.md.
+    require_turn
+    audit "cert_started" "{}"
+    $COMPOSE --profile certbot run --rm certbot certonly --webroot -w /var/www/certbot \
+        --cert-name verifi.cloud -d verifi.cloud -d www.verifi.cloud \
+        --expand --keep-until-expiring --non-interactive
+    $COMPOSE exec -T nginx nginx -s reload
+    audit "cert_finished" "{}"
+    ;;
   *)
-    echo "Verifi ops. Usage: verifi status|turn|deploy|restart|logs|env-set|payments-setup|logging-setup|acceptance-logging|backup"
+    echo "Verifi ops. Usage: verifi status|turn|deploy|restart|logs|env-set|payments-setup|logging-setup|acceptance-logging|backup|cert"
     echo "Actor: VERIFI_ACTOR=claude|hermes|juhana. Mutating commands require the turn (verifi turn)."
     exit 1
     ;;
