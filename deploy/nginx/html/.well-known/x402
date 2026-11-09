@@ -1,4 +1,8 @@
 {
   "version": 1,
-  "resources": ["https://verifi.cloud/verify", "https://verifi.cloud/verify-unlock"]
+  "resources": [
+    "https://verifi.cloud/verify",
+    "https://verifi.cloud/verify-unlock"
+  ],
+  "agentToolsVerify": "atc_fo7uf6SYWmDuktwOK9npLrLG3zZNeLwR"
 }
