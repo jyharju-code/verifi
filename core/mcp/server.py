@@ -14,10 +14,12 @@ Run: python -m core.mcp.server
 import base64
 import json
 import os
+from typing import Annotated
 
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from pydantic import Field
 
 VERIFY_API = os.environ.get("VERIFY_API_URL", "http://verify-api:8702")
 # The address a payer can reach. Must be public: resource.url in a payment
@@ -186,14 +188,26 @@ def _payment_result(resp: httpx.Response, *, tool: str, price: str) -> CallToolR
     )
 
 
-@mcp.tool()
+VerifyId = Annotated[str, Field(description="Verification ID returned by verify_claim.")]
+PaymentSignature = Annotated[
+    str | None,
+    Field(description=(
+        "Optional base64-encoded x402 PAYMENT-SIGNATURE authorizing this payment. "
+        "Omit when the MCP client supplies x402/payment metadata. Never send a private key."
+    )),
+]
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 async def verify_claim(
-    intent: str,
-    claim: str,
-    agent_id: str,
+    intent: Annotated[str, Field(description="What the agent is trying to do (up to 2000 characters).")],
+    claim: Annotated[str, Field(description="What the human should verify or refine (up to 4000 characters).")],
+    agent_id: Annotated[str, Field(description="Requester wallet address on Base (0x followed by 40 hex digits).")],
     ctx: Context,
-    callback_url: str | None = None,
-    payment_signature: str | None = None,
+    callback_url: Annotated[str | None, Field(description=(
+        "HTTPS endpoint for verify.ready or verify.failed notifications. Omit to poll get_verify."
+    ))] = None,
+    payment_signature: PaymentSignature = None,
 ) -> CallToolResult:
     """Ask a real human to verify, decide on, or improve something before your agent acts.
 
@@ -204,13 +218,6 @@ async def verify_claim(
     via x402) and returns a payment requirement first if unpaid; reading that
     requirement is free and shows every later price.
 
-    intent: what your agent is trying to do (max 2000 chars).
-    claim: the claim a human should verify (max 4000 chars).
-    agent_id: your wallet address (0x + 40 hex). Signs the x402 payments.
-    callback_url: optional HTTPS endpoint for verify.ready or verify.failed.
-    Use it to avoid an active polling loop; retain verify_id for recovery.
-    payment_signature: optional manual compatibility input. Standard x402-aware
-    MCP clients send the signed payment through request metadata automatically.
     Returns status "processing" with a verify_id. Prefer callback_url, or poll
     get_verify at the returned interval until status is "ready" or "failed".
     If ready, call unlock_verify. Only one active verify per agent_id at a time.
@@ -231,11 +238,10 @@ async def verify_claim(
     return _payment_result(resp, tool="verify_claim", price="The admission")
 
 
-@mcp.tool()
-async def get_verify(verify_id: str) -> dict:
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
+async def get_verify(verify_id: VerifyId) -> dict:
     """Read the current state of a verification. Free, never reveals a locked answer.
 
-    verify_id: the id returned by verify_claim.
     Returns status "processing" (a human is working: wait retry_after_seconds,
     or rely on the callback), "ready" (an answer exists; service_window shows
     the window that applied and the exact unlock price, then call
@@ -248,11 +254,11 @@ async def get_verify(verify_id: str) -> dict:
     return resp.json()
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False))
 async def unlock_verify(
-    verify_id: str,
+    verify_id: VerifyId,
     ctx: Context,
-    payment_signature: str | None = None,
+    payment_signature: PaymentSignature = None,
 ) -> CallToolResult:
     """Unlock a ready chain and return the human result.
 
@@ -287,7 +293,7 @@ async def _current_terms() -> dict | None:
     return None
 
 
-@mcp.tool()
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def verifi_info() -> dict:
     """Describe Verifi before using it: what it does, how to pay, and the current price terms.
 
