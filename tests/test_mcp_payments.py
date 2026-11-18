@@ -59,6 +59,23 @@ def context_with_payment(payment=None, headers=None):
 
 
 class McpPaymentTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tool_discovery_describes_inputs_and_payment_side_effects(self):
+        tools = {tool.name: tool for tool in await mcp.list_tools()}
+        for name, read_only in {
+            "verify_claim": False,
+            "get_verify": True,
+            "unlock_verify": False,
+            "verifi_info": True,
+        }.items():
+            with self.subTest(tool=name):
+                self.assertIs(tools[name].annotations.readOnlyHint, read_only)
+        for tool in tools.values():
+            properties = tool.inputSchema["properties"]
+            self.assertNotIn("ctx", properties)
+            for name, schema in properties.items():
+                with self.subTest(tool=tool.name, parameter=name):
+                    self.assertTrue(schema.get("description", "").strip())
+
     def test_runtime_version_matches_the_public_contract(self):
         self.assertEqual(MCP_CONTRACT_VERSION, "3.0.1")
         self.assertEqual(mcp._mcp_server.version, MCP_CONTRACT_VERSION)
